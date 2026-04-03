@@ -319,9 +319,9 @@ router.post('/resource-token', authenticate, (req: Request, res: Response) => {
   if (purpose !== 'download' && purpose !== 'immich' && purpose !== 'synologyphotos') {
     return res.status(400).json({ error: 'Invalid purpose' });
   }
-  const token = createEphemeralToken(authReq.user.id, purpose);
+  const token = createResourceToken(authReq.user.id, purpose);
   if (!token) return res.status(503).json({ error: 'Service unavailable' });
-  res.json({ token });
+  res.json(token);
 });
 
 export default router;
