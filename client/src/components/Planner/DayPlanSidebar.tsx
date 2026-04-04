@@ -136,6 +136,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
   const [dragOverDayId, setDragOverDayId] = useState(null)
   const [hoveredId, setHoveredId] = useState(null)
   const [transportDetail, setTransportDetail] = useState(null)
+  const [transportPosVersion, setTransportPosVersion] = useState(0)
   const [timeConfirm, setTimeConfirm] = useState<{
     dayId: number; fromId: number; time: string;
     // For drag & drop reorder
@@ -340,46 +341,38 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
       initTransportPositions(dayId)
     }
 
-    // Build base list: untimed places + notes sorted by order_index/sort_order
-    const timedPlaces = da.filter(a => parseTimeToMinutes(a.place?.place_time) !== null)
-    const freePlaces = da.filter(a => parseTimeToMinutes(a.place?.place_time) === null)
-
+    // Build base list: ALL places (timed and untimed) + notes sorted by order_index/sort_order
+    // Places keep their order_index ordering — only transports are inserted based on time.
     const baseItems = [
-      ...freePlaces.map(a => ({ type: 'place' as const, sortKey: a.order_index, data: a })),
+      ...da.map(a => ({ type: 'place' as const, sortKey: a.order_index, data: a })),
       ...dn.map(n => ({ type: 'note' as const, sortKey: n.sort_order, data: n })),
     ].sort((a, b) => a.sortKey - b.sortKey)
 
-    // Timed places + transports: compute sortKeys based on time, inserted among base items
-    // For multi-day transports, use the appropriate display time for this day
-    const allTimed = [
-      ...timedPlaces.map(a => ({ type: 'place' as const, data: a, minutes: parseTimeToMinutes(a.place?.place_time)! })),
-      ...transport.map(r => ({
-        type: 'transport' as const,
-        data: r,
-        minutes: parseTimeToMinutes(getDisplayTimeForDay(r, dayDate)) ?? 0,
-      })),
-    ].sort((a, b) => a.minutes - b.minutes)
+    // Only transports are inserted among base items based on time/position
+    const timedTransports = transport.map(r => ({
+      type: 'transport' as const,
+      data: r,
+      minutes: parseTimeToMinutes(getDisplayTimeForDay(r, dayDate)) ?? 0,
+    })).sort((a, b) => a.minutes - b.minutes)
 
-    if (allTimed.length === 0) return baseItems
+    if (timedTransports.length === 0) return baseItems
     if (baseItems.length === 0) {
-      return allTimed.map((item, i) => ({ ...item, sortKey: i }))
+      return timedTransports.map((item, i) => ({ ...item, sortKey: i }))
     }
 
-    // Insert timed items among base items using time-to-position mapping.
-    // Each timed item finds the last base place whose order_index corresponds
-    // to a reasonable position, then gets a fractional sortKey after it.
+    // Insert transports among base items using persisted position or time-to-position mapping.
     const result = [...baseItems]
-    for (let ti = 0; ti < allTimed.length; ti++) {
-      const timed = allTimed[ti]
+    for (let ti = 0; ti < timedTransports.length; ti++) {
+      const timed = timedTransports[ti]
       const minutes = timed.minutes
 
-      // For transports, use persisted position if available
-      if (timed.type === 'transport' && timed.data.day_plan_position != null) {
+      // Use persisted position if available
+      if (timed.data.day_plan_position != null) {
         result.push({ type: timed.type, sortKey: timed.data.day_plan_position, data: timed.data })
         continue
       }
 
-      // Find insertion position: after the last base item with time <= this item's time
+      // Find insertion position: after the last base item with time <= this transport's time
       let insertAfterKey = -Infinity
       for (const item of result) {
         if (item.type === 'place') {
@@ -410,7 +403,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
     return map
   // getMergedItems is redefined each render but captures assignments/dayNotes/reservations/days via closure
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [days, assignments, dayNotes, reservations])
+  }, [days, assignments, dayNotes, reservations, transportPosVersion])
 
   const openAddNote = (dayId, e) => {
     e?.stopPropagation()
@@ -509,6 +502,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
           const res = reservations.find(r => r.id === tu.id)
           if (res) res.day_plan_position = tu.day_plan_position
         }
+        setTransportPosVersion(v => v + 1)
         await reservationsApi.updatePositions(tripId, transportUpdates)
       }
       if (prevAssignmentIds.length) {
@@ -1081,18 +1075,20 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                     const { placeId, assignmentId, noteId, fromDayId } = getDragData(e)
                     // Drop on transport card (detected via dropTargetRef for sync accuracy)
                     if (dropTargetRef.current?.startsWith('transport-')) {
-                      const transportId = Number(dropTargetRef.current.replace('transport-', ''))
+                      const isAfter = dropTargetRef.current.startsWith('transport-after-')
+                      const parts = dropTargetRef.current.replace('transport-after-', '').replace('transport-', '').split('-')
+                      const transportId = Number(parts[0])
 
                       if (placeId) {
                         onAssignToDay?.(parseInt(placeId), day.id)
                       } else if (assignmentId && fromDayId !== day.id) {
                         tripActions.moveAssignment(tripId, Number(assignmentId), fromDayId, day.id).catch((err: unknown) => toast.error(err instanceof Error ? err.message : 'Unknown error'))
                       } else if (assignmentId) {
-                        handleMergedDrop(day.id, 'place', Number(assignmentId), 'transport', transportId)
+                        handleMergedDrop(day.id, 'place', Number(assignmentId), 'transport', transportId, isAfter)
                       } else if (noteId && fromDayId !== day.id) {
                         tripActions.moveDayNote(tripId, fromDayId, day.id, Number(noteId)).catch((err: unknown) => toast.error(err instanceof Error ? err.message : 'Unknown error'))
                       } else if (noteId) {
-                        handleMergedDrop(day.id, 'note', Number(noteId), 'transport', transportId)
+                        handleMergedDrop(day.id, 'note', Number(noteId), 'transport', transportId, isAfter)
                       }
                       setDraggingId(null); setDropTargetKey(null); dragDataRef.current = null; window.__dragData = null
                       return
@@ -1133,8 +1129,9 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                     </div>
                   ) : (
                     merged.map((item, idx) => {
-                      const itemKey = item.type === 'transport' ? `transport-${item.data.id}` : (item.type === 'place' ? `place-${item.data.id}` : `note-${item.data.id}`)
+                      const itemKey = item.type === 'transport' ? `transport-${item.data.id}-${day.id}` : (item.type === 'place' ? `place-${item.data.id}` : `note-${item.data.id}`)
                       const showDropLine = (!!draggingId || !!dropTargetKey) && dropTargetKey === itemKey
+                      const showDropLineAfter = item.type === 'transport' && (!!draggingId || !!dropTargetKey) && dropTargetKey === `transport-after-${item.data.id}-${day.id}`
 
                       if (item.type === 'place') {
                         const assignment = item.data
@@ -1392,20 +1389,28 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                           {showDropLine && <div style={{ height: 2, background: 'var(--text-primary)', borderRadius: 1, margin: '2px 8px' }} />}
                           <div
                             onClick={() => setTransportDetail(res)}
-                            onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDropTargetKey(`transport-${res.id}`) }}
+                            onDragOver={e => {
+                              e.preventDefault(); e.stopPropagation()
+                              const rect = e.currentTarget.getBoundingClientRect()
+                              const inBottom = e.clientY > rect.top + rect.height / 2
+                              const key = inBottom ? `transport-after-${res.id}-${day.id}` : `transport-${res.id}-${day.id}`
+                              if (dropTargetRef.current !== key) setDropTargetKey(key)
+                            }}
                             onDrop={e => {
                               e.preventDefault(); e.stopPropagation()
+                              const rect = e.currentTarget.getBoundingClientRect()
+                              const insertAfter = e.clientY > rect.top + rect.height / 2
                               const { placeId, assignmentId: fromAssignmentId, noteId, fromDayId } = getDragData(e)
                               if (placeId) {
                                 onAssignToDay?.(parseInt(placeId), day.id)
                               } else if (fromAssignmentId && fromDayId !== day.id) {
                                 tripActions.moveAssignment(tripId, Number(fromAssignmentId), fromDayId, day.id).catch((err: unknown) => toast.error(err instanceof Error ? err.message : 'Unknown error'))
                               } else if (fromAssignmentId) {
-                                handleMergedDrop(day.id, 'place', Number(fromAssignmentId), 'transport', res.id)
+                                handleMergedDrop(day.id, 'place', Number(fromAssignmentId), 'transport', res.id, insertAfter)
                               } else if (noteId && fromDayId !== day.id) {
                                 tripActions.moveDayNote(tripId, fromDayId, day.id, Number(noteId)).catch((err: unknown) => toast.error(err instanceof Error ? err.message : 'Unknown error'))
                               } else if (noteId) {
-                                handleMergedDrop(day.id, 'note', Number(noteId), 'transport', res.id)
+                                handleMergedDrop(day.id, 'note', Number(noteId), 'transport', res.id, insertAfter)
                               }
                               setDraggingId(null); setDropTargetKey(null); dragDataRef.current = null; window.__dragData = null
                             }}
@@ -1462,6 +1467,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                               )}
                             </div>
                           </div>
+                          {showDropLineAfter && <div style={{ height: 2, background: 'var(--text-primary)', borderRadius: 1, margin: '2px 8px' }} />}
                           </React.Fragment>
                         )
                       }
