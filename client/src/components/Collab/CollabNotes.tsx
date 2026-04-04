@@ -491,7 +491,7 @@ function NoteFormModal({ onClose, onSubmit, onDeleteFile, existingCategories, ca
                 const isImage = a.mime_type?.startsWith('image/')
                 return (
                   <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 8px', borderRadius: 8, background: 'var(--bg-secondary)', fontSize: 11, color: 'var(--text-muted)' }}>
-                    {isImage && <img src={a.url} style={{ width: 18, height: 18, objectFit: 'cover', borderRadius: 3 }} />}
+                    {isImage && <AuthedImg src={a.url} style={{ width: 18, height: 18, objectFit: 'cover', borderRadius: 3 }} />}
                     {(a.original_name || '').length > 20 ? a.original_name.slice(0, 17) + '...' : a.original_name}
                     <button type="button" onClick={() => handleDeleteAttachment(a.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', padding: 0, display: 'flex' }}>
                       <X size={10} />
