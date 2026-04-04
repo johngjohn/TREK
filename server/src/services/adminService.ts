@@ -9,6 +9,7 @@ import { maybe_encrypt_api_key, decrypt_api_key } from './apiKeyCrypto';
 import { getAllPermissions, savePermissions as savePerms, PERMISSION_ACTIONS } from './permissions';
 import { revokeUserSessions } from '../mcp';
 import { validatePassword } from './passwordPolicy';
+import { getPhotoProviderConfig } from './memories/helpersService';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -466,10 +467,10 @@ export function deleteTemplateItem(itemId: string) {
 export function listAddons() {
   const addons = db.prepare('SELECT * FROM addons ORDER BY sort_order, id').all() as Addon[];
   const providers = db.prepare(`
-    SELECT id, name, description, icon, enabled, config, sort_order
+    SELECT id, name, description, icon, enabled, sort_order
     FROM photo_providers
     ORDER BY sort_order, id
-  `).all() as Array<{ id: string; name: string; description?: string | null; icon: string; enabled: number; config: string; sort_order: number }>;
+  `).all() as Array<{ id: string; name: string; description?: string | null; icon: string; enabled: number; sort_order: number }>;
   const fields = db.prepare(`
     SELECT provider_id, field_key, label, input_type, placeholder, required, secret, settings_key, payload_key, sort_order
     FROM photo_provider_fields
@@ -502,7 +503,7 @@ export function listAddons() {
       type: 'photo_provider',
       icon: p.icon,
       enabled: !!p.enabled,
-      config: JSON.parse(p.config || '{}'),
+      config: getPhotoProviderConfig(p.id),
       fields: (fieldsByProvider.get(p.id) || []).map(f => ({
         key: f.field_key,
         label: f.label,
@@ -521,7 +522,7 @@ export function listAddons() {
 
 export function updateAddon(id: string, data: { enabled?: boolean; config?: Record<string, unknown> }) {
   const addon = db.prepare('SELECT * FROM addons WHERE id = ?').get(id) as Addon | undefined;
-  const provider = db.prepare('SELECT * FROM photo_providers WHERE id = ?').get(id) as { id: string; name: string; description?: string | null; icon: string; enabled: number; config: string; sort_order: number } | undefined;
+  const provider = db.prepare('SELECT * FROM photo_providers WHERE id = ?').get(id) as { id: string; name: string; description?: string | null; icon: string; enabled: number; sort_order: number } | undefined;
   if (!addon && !provider) return { error: 'Addon not found', status: 404 };
 
   if (addon) {
@@ -529,11 +530,10 @@ export function updateAddon(id: string, data: { enabled?: boolean; config?: Reco
     if (data.config !== undefined) db.prepare('UPDATE addons SET config = ? WHERE id = ?').run(JSON.stringify(data.config), id);
   } else {
     if (data.enabled !== undefined) db.prepare('UPDATE photo_providers SET enabled = ? WHERE id = ?').run(data.enabled ? 1 : 0, id);
-    if (data.config !== undefined) db.prepare('UPDATE photo_providers SET config = ? WHERE id = ?').run(JSON.stringify(data.config), id);
   }
 
   const updatedAddon = db.prepare('SELECT * FROM addons WHERE id = ?').get(id) as Addon | undefined;
-  const updatedProvider = db.prepare('SELECT * FROM photo_providers WHERE id = ?').get(id) as { id: string; name: string; description?: string | null; icon: string; enabled: number; config: string; sort_order: number } | undefined;
+  const updatedProvider = db.prepare('SELECT * FROM photo_providers WHERE id = ?').get(id) as { id: string; name: string; description?: string | null; icon: string; enabled: number; sort_order: number } | undefined;
   const updated = updatedAddon
     ? { ...updatedAddon, enabled: !!updatedAddon.enabled, config: JSON.parse(updatedAddon.config || '{}') }
     : updatedProvider
@@ -544,7 +544,7 @@ export function updateAddon(id: string, data: { enabled?: boolean; config?: Reco
         type: 'photo_provider',
         icon: updatedProvider.icon,
         enabled: !!updatedProvider.enabled,
-        config: JSON.parse(updatedProvider.config || '{}'),
+        config: getPhotoProviderConfig(updatedProvider.id),
         sort_order: updatedProvider.sort_order,
       }
       : null;

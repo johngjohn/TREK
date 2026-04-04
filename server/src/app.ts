@@ -33,13 +33,12 @@ import backupRoutes from './routes/backup';
 import oidcRoutes from './routes/oidc';
 import vacayRoutes from './routes/vacay';
 import atlasRoutes from './routes/atlas';
-import immichRoutes from './routes/immich';
-import synologyRoutes from './routes/synology';
-import memoriesRoutes from './routes/memories';
+import memoriesRoutes from './routes/memories/unified';
 import notificationRoutes from './routes/notifications';
 import shareRoutes from './routes/share';
 import { mcpHandler } from './mcp';
 import { Addon } from './types';
+import { getPhotoProviderConfig } from './services/memories/helpersService';
 
 export function createApp(): express.Application {
   const app = express();
@@ -196,11 +195,11 @@ export function createApp(): express.Application {
   app.get('/api/addons', authenticate, (_req: Request, res: Response) => {
     const addons = db.prepare('SELECT id, name, type, icon, enabled FROM addons WHERE enabled = 1 ORDER BY sort_order').all() as Pick<Addon, 'id' | 'name' | 'type' | 'icon' | 'enabled'>[];
     const providers = db.prepare(`
-      SELECT id, name, icon, enabled, config, sort_order
+      SELECT id, name, icon, enabled, sort_order
       FROM photo_providers
       WHERE enabled = 1
       ORDER BY sort_order, id
-    `).all() as Array<{ id: string; name: string; icon: string; enabled: number; config: string; sort_order: number }>;
+    `).all() as Array<{ id: string; name: string; icon: string; enabled: number; sort_order: number }>;
     const fields = db.prepare(`
       SELECT provider_id, field_key, label, input_type, placeholder, required, secret, settings_key, payload_key, sort_order
       FROM photo_provider_fields
@@ -234,7 +233,7 @@ export function createApp(): express.Application {
           type: 'photo_provider',
           icon: p.icon,
           enabled: !!p.enabled,
-          config: JSON.parse(p.config || '{}'),
+          config: getPhotoProviderConfig(p.id),
           fields: (fieldsByProvider.get(p.id) || []).map(f => ({
             key: f.field_key,
             label: f.label,
@@ -255,8 +254,6 @@ export function createApp(): express.Application {
   app.use('/api/addons/vacay', vacayRoutes);
   app.use('/api/addons/atlas', atlasRoutes);
   app.use('/api/integrations/memories', memoriesRoutes);
-  app.use('/api/integrations/immich', immichRoutes);
-  app.use('/api/integrations/synologyphotos', synologyRoutes);
   app.use('/api/maps', mapsRoutes);
   app.use('/api/weather', weatherRoutes);
   app.use('/api/settings', settingsRoutes);

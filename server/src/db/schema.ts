@@ -18,6 +18,8 @@ function createTables(db: Database.Database): void {
       mfa_enabled INTEGER DEFAULT 0,
       mfa_secret TEXT,
       mfa_backup_codes TEXT,
+      immich_url TEXT,
+      immich_access_token TEXT,
       synology_url TEXT,
       synology_username TEXT,
       synology_password TEXT,
@@ -166,6 +168,7 @@ function createTables(db: Database.Database): void {
       place_id INTEGER REFERENCES places(id) ON DELETE SET NULL,
       assignment_id INTEGER REFERENCES day_assignments(id) ON DELETE SET NULL,
       title TEXT NOT NULL,
+      accommodation_id TEXT,
       reservation_time TEXT,
       reservation_end_time TEXT,
       location TEXT,
@@ -232,7 +235,6 @@ function createTables(db: Database.Database): void {
       description TEXT,
       icon TEXT DEFAULT 'Image',
       enabled INTEGER DEFAULT 0,
-      config TEXT DEFAULT '{}',
       sort_order INTEGER DEFAULT 0
     );
 

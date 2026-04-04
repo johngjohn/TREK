@@ -643,14 +643,13 @@ function runMigrations(db: Database.Database): void {
       // Seed Synology Photos provider and fields in existing databases
       try {
         db.prepare(`
-          INSERT INTO photo_providers (id, name, description, icon, enabled, config, sort_order)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO photo_providers (id, name, description, icon, enabled, sort_order)
+          VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             description = excluded.description,
             icon = excluded.icon,
             enabled = excluded.enabled,
-            config = excluded.config,
             sort_order = excluded.sort_order
         `).run(
           'synologyphotos',
@@ -658,12 +657,6 @@ function runMigrations(db: Database.Database): void {
           'Synology Photos integration with separate account settings',
           'Image',
           0,
-          JSON.stringify({
-            settings_get: '/integrations/synologyphotos/settings',
-            settings_put: '/integrations/synologyphotos/settings',
-            status_get: '/integrations/synologyphotos/status',
-            test_post: '/integrations/synologyphotos/test',
-          }),
           1,
         );
       } catch (err: any) {
@@ -690,6 +683,23 @@ function runMigrations(db: Database.Database): void {
       } catch (err: any) {
         if (!err.message?.includes('no such table')) throw err;
       }
+    },
+    () => {
+      // Remove the stored config column from photo_providers now that it is generated from provider id.
+      const columns = db.prepare("PRAGMA table_info('photo_providers')").all() as Array<{ name: string }>;
+      const names = new Set(columns.map(c => c.name));
+      if (!names.has('config')) return;
+
+      db.exec('ALTER TABLE photo_providers DROP COLUMN config');
+    },
+    () => {
+      const columns = db.prepare("PRAGMA table_info('trip_photos')").all() as Array<{ name: string }>;
+      const names = new Set(columns.map(c => c.name));
+      if (names.has('asset_id') && !names.has('immich_asset_id')) return;
+      db.exec('ALTER TABLE `trip_photos` RENAME COLUMN immich_asset_id TO asset_id');
+      db.exec('ALTER TABLE `trip_photos` ADD COLUMN provider TEXT NOT NULL DEFAULT "immich"');
+      db.exec('ALTER TABLE `trip_album_links` ADD COLUMN provider TEXT NOT NULL DEFAULT "immich"');
+      db.exec('ALTER TABLE `trip_album_links` RENAME COLUMN immich_album_id TO album_id');
     },
   ];
 
