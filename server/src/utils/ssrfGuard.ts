@@ -112,10 +112,15 @@ export async function checkSsrf(rawUrl: string, bypassInternalIpAllowed: boolean
  */
 export function createPinnedAgent(resolvedIp: string, protocol: string): http.Agent | https.Agent {
   const options = {
-    lookup: (_hostname: string, _opts: unknown, callback: (err: Error | null, addr: string, family: number) => void) => {
+    lookup: (_hostname: string, opts: Record<string, unknown>, callback: Function) => {
       // Determine address family from IP format
       const family = resolvedIp.includes(':') ? 6 : 4;
-      callback(null, resolvedIp, family);
+      // Node.js 18+ may call lookup with `all: true`, expecting an array of address objects
+      if (opts && opts.all) {
+        callback(null, [{ address: resolvedIp, family }]);
+      } else {
+        callback(null, resolvedIp, family);
+      }
     },
   };
   return protocol === 'https:' ? new https.Agent(options) : new http.Agent(options);
