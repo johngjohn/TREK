@@ -328,6 +328,11 @@ interface VersionInfo {
 const VERSION_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 let _versionCache: { data: VersionInfo; expiresAt: number } | null = null;
 
+/** Test-only: clear the in-memory version cache. */
+export function __clearVersionCacheForTests(): void {
+  _versionCache = null;
+}
+
 export async function checkVersion(): Promise<VersionInfo> {
   if (_versionCache && Date.now() < _versionCache.expiresAt) {
     return _versionCache.data;
