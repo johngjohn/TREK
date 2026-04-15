@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../helpers/msw/server';
 import { useAuthStore } from '../../../src/store/authStore';
+import { authApi } from '../../../src/api/client';
 import { resetAllStores } from '../../helpers/store';
 import { buildUser } from '../../helpers/factories';
 
@@ -425,11 +426,8 @@ describe('authStore', () => {
 
   describe('FE-STORE-AUTH-UPLOAD: uploadAvatar', () => {
     it('updates avatar_url from response', async () => {
-      server.use(
-        http.post('/api/auth/avatar', () =>
-          HttpResponse.json({ avatar_url: '/uploads/avatar-new.png' })
-        )
-      );
+      // FormData POST hangs on CI — mock at the API boundary instead of MSW.
+      const uploadSpy = vi.spyOn(authApi, 'uploadAvatar').mockResolvedValueOnce({ avatar_url: '/uploads/avatar-new.png' });
 
       useAuthStore.setState({ user: buildUser() });
 
@@ -438,6 +436,56 @@ describe('authStore', () => {
 
       expect(result.avatar_url).toBe('/uploads/avatar-new.png');
       expect(useAuthStore.getState().user?.avatar_url).toBe('/uploads/avatar-new.png');
+      uploadSpy.mockRestore();
+    });
+  });
+
+  describe('FE-STORE-AUTH-PERSIST-001: logout resets persisted snapshot', () => {
+    it('snapshot has isAuthenticated:false after logout (PWA offline will redirect to login)', () => {
+      useAuthStore.setState({ user: buildUser(), isAuthenticated: true });
+
+      useAuthStore.getState().logout();
+
+      const snapshot = JSON.parse(localStorage.getItem('trek_auth_snapshot') ?? '{}');
+      expect(snapshot?.state?.isAuthenticated).toBe(false);
+      expect(snapshot?.state?.user).toBeNull();
+    });
+  });
+
+  describe('FE-STORE-AUTH-PERSIST-002: 401 resets persisted snapshot', () => {
+    it('snapshot has isAuthenticated:false after 401 (expired session clears offline access)', async () => {
+      useAuthStore.setState({ user: buildUser(), isAuthenticated: true });
+
+      server.use(
+        http.get('/api/auth/me', () =>
+          HttpResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        )
+      );
+
+      await useAuthStore.getState().loadUser();
+
+      const snapshot = JSON.parse(localStorage.getItem('trek_auth_snapshot') ?? '{}');
+      expect(snapshot?.state?.isAuthenticated).toBe(false);
+      expect(useAuthStore.getState().isAuthenticated).toBe(false);
+    });
+  });
+
+  describe('FE-STORE-AUTH-PERSIST-003: network error preserves snapshot', () => {
+    it('snapshot retains isAuthenticated:true on network error (offline PWA skips login screen)', async () => {
+      useAuthStore.setState({ user: buildUser(), isAuthenticated: true });
+
+      server.use(
+        http.get('/api/auth/me', () =>
+          HttpResponse.json({ error: 'Server error' }, { status: 500 })
+        )
+      );
+
+      await useAuthStore.getState().loadUser();
+
+      // Persist middleware writes the state; isAuthenticated must stay true
+      const snapshot = JSON.parse(localStorage.getItem('trek_auth_snapshot') ?? '{}');
+      expect(snapshot?.state?.isAuthenticated).toBe(true);
+      expect(useAuthStore.getState().isAuthenticated).toBe(true);
     });
   });
 });

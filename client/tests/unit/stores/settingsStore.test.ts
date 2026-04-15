@@ -170,6 +170,37 @@ describe('settingsStore', () => {
     });
   });
 
+  describe('FE-STORE-SETTINGS-015: setLanguageTransient updates state without touching localStorage', () => {
+    it('sets language in state but does not write to localStorage', () => {
+      localStorage.clear();
+
+      useSettingsStore.getState().setLanguageTransient('fr');
+
+      expect(useSettingsStore.getState().settings.language).toBe('fr');
+      expect(localStorage.getItem('app_language')).toBeNull();
+    });
+  });
+
+  describe('FE-STORE-SETTINGS-016: setLanguageTransient rejects unsupported language code', () => {
+    it('leaves state unchanged for an unknown code', () => {
+      const before = useSettingsStore.getState().settings.language;
+
+      useSettingsStore.getState().setLanguageTransient('xx');
+
+      expect(useSettingsStore.getState().settings.language).toBe(before);
+    });
+  });
+
+  describe('FE-STORE-SETTINGS-017: setLanguageTransient does not overwrite an explicit localStorage choice', () => {
+    it('localStorage remains unchanged after a transient set', () => {
+      localStorage.setItem('app_language', 'de');
+
+      useSettingsStore.getState().setLanguageTransient('es');
+
+      expect(localStorage.getItem('app_language')).toBe('de');
+    });
+  });
+
   describe('FE-STORE-SETTINGS-014: updateSetting API failure leaves optimistic state', () => {
     it('throws on API failure but keeps the optimistic state', async () => {
       server.use(

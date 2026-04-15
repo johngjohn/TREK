@@ -43,18 +43,24 @@ export interface Place {
   trip_id: number
   name: string
   description: string | null
+  notes: string | null
   lat: number | null
   lng: number | null
   address: string | null
   category_id: number | null
   icon: string | null
   price: string | null
+  currency: string | null
   image_url: string | null
   google_place_id: string | null
   osm_id: string | null
   route_geometry: string | null
   place_time: string | null
   end_time: string | null
+  duration_minutes: number | null
+  transport_mode: string | null
+  website: string | null
+  phone: string | null
   created_at: string
 }
 
@@ -296,11 +302,18 @@ export interface AppConfig {
   demo_mode: boolean
   oidc_configured: boolean
   oidc_display_name?: string
+  oidc_only_mode?: boolean
   has_maps_key?: boolean
   allowed_file_types?: string
   timezone?: string
   /** When true, users without MFA cannot use the app until they enable it */
   require_mfa?: boolean
+  // Granular auth toggles
+  password_login?: boolean
+  password_registration?: boolean
+  oidc_login?: boolean
+  oidc_registration?: boolean
+  env_override_oidc_only?: boolean
 }
 
 // Translation function type
@@ -330,6 +343,7 @@ export interface VacayPlan {
   block_weekends: boolean
   carry_over_enabled: boolean
   company_holidays_enabled: boolean
+  week_start?: number
   name?: string
   year?: number
   owner_id?: number

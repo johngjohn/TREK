@@ -8,6 +8,7 @@ import {
   getIntlLanguage,
   isRtlLanguage,
   SUPPORTED_LANGUAGES,
+  detectBrowserLanguage,
 } from '../../../src/i18n'
 import { resetAllStores, seedStore } from '../../helpers/store'
 import { useSettingsStore } from '../../../src/store/settingsStore'
@@ -91,8 +92,58 @@ describe('SUPPORTED_LANGUAGES', () => {
   it('FE-COMP-I18N-009: contains expected entries with value/label shape', () => {
     expect(Array.isArray(SUPPORTED_LANGUAGES)).toBe(true)
     expect(SUPPORTED_LANGUAGES).toHaveLength(14)
-    expect(SUPPORTED_LANGUAGES).toContainEqual({ value: 'en', label: 'English' })
-    expect(SUPPORTED_LANGUAGES).toContainEqual({ value: 'ar', label: 'العربية' })
+    expect(SUPPORTED_LANGUAGES).toContainEqual(expect.objectContaining({ value: 'en', label: 'English' }))
+    expect(SUPPORTED_LANGUAGES).toContainEqual(expect.objectContaining({ value: 'ar', label: 'العربية' }))
+  })
+})
+
+// ── FE-COMP-I18N-016 to 023: detectBrowserLanguage ───────────────────────────
+
+describe('detectBrowserLanguage', () => {
+  afterEach(() => {
+    Object.defineProperty(navigator, 'languages', { value: [], configurable: true })
+    Object.defineProperty(navigator, 'language', { value: '', configurable: true })
+  })
+
+  it('FE-COMP-I18N-016: exact match returns the matched code', () => {
+    Object.defineProperty(navigator, 'languages', { value: ['de'], configurable: true })
+    expect(detectBrowserLanguage()).toBe('de')
+  })
+
+  it('FE-COMP-I18N-017: region-tagged exact match (zh-TW) returns zh-TW', () => {
+    Object.defineProperty(navigator, 'languages', { value: ['zh-TW'], configurable: true })
+    expect(detectBrowserLanguage()).toBe('zh-TW')
+  })
+
+  it('FE-COMP-I18N-018: prefix match (de-AT → de)', () => {
+    Object.defineProperty(navigator, 'languages', { value: ['de-AT'], configurable: true })
+    expect(detectBrowserLanguage()).toBe('de')
+  })
+
+  it('FE-COMP-I18N-019: pt-PT returns null (European Portuguese is a distinct language)', () => {
+    Object.defineProperty(navigator, 'languages', { value: ['pt-PT'], configurable: true })
+    expect(detectBrowserLanguage()).toBeNull()
+  })
+
+  it('FE-COMP-I18N-020: pt-BR maps to br', () => {
+    Object.defineProperty(navigator, 'languages', { value: ['pt-BR'], configurable: true })
+    expect(detectBrowserLanguage()).toBe('br')
+  })
+
+  it('FE-COMP-I18N-021: first-match-wins across multiple entries', () => {
+    Object.defineProperty(navigator, 'languages', { value: ['xx-XX', 'fr'], configurable: true })
+    expect(detectBrowserLanguage()).toBe('fr')
+  })
+
+  it('FE-COMP-I18N-022: unknown language returns null', () => {
+    Object.defineProperty(navigator, 'languages', { value: ['xx'], configurable: true })
+    expect(detectBrowserLanguage()).toBeNull()
+  })
+
+  it('FE-COMP-I18N-023: falls back to navigator.language when navigator.languages is empty', () => {
+    Object.defineProperty(navigator, 'languages', { value: [], configurable: true })
+    Object.defineProperty(navigator, 'language', { value: 'es', configurable: true })
+    expect(detectBrowserLanguage()).toBe('es')
   })
 })
 

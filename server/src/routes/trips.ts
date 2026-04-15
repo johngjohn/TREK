@@ -29,6 +29,13 @@ import {
   ValidationError,
   TRIP_SELECT,
 } from '../services/tripService';
+import { listDays, listAccommodations } from '../services/dayService';
+import { listPlaces } from '../services/placeService';
+import { listItems as listPackingItems } from '../services/packingService';
+import { listItems as listTodoItems } from '../services/todoService';
+import { listBudgetItems } from '../services/budgetService';
+import { listReservations } from '../services/reservationService';
+import { listFiles } from '../services/fileService';
 
 const router = express.Router();
 
@@ -292,6 +299,41 @@ router.delete('/:id/members/:userId', authenticate, (req: Request, res: Response
 
   removeMember(req.params.id, targetId);
   res.json({ success: true });
+});
+
+// ── Offline bundle ────────────────────────────────────────────────────────
+// Returns all trip sub-collections in a single request for offline caching.
+
+router.get('/:id/bundle', authenticate, (req: Request, res: Response) => {
+  const authReq = req as AuthRequest;
+  const tripId = req.params.id;
+
+  const trip = getTrip(tripId, authReq.user.id);
+  if (!trip) return res.status(404).json({ error: 'Trip not found' });
+
+  const { days } = listDays(tripId);
+  const places = listPlaces(String(tripId), {});
+  const packingItems = listPackingItems(tripId);
+  const todoItems = listTodoItems(tripId);
+  const budgetItems = listBudgetItems(tripId);
+  const reservations = listReservations(tripId);
+  const files = listFiles(tripId, false);
+  const accommodations = listAccommodations(tripId);
+  const { owner, members } = listMembers(tripId, trip.user_id);
+  const allMembers = [owner, ...(members || [])].filter(Boolean);
+
+  res.json({
+    trip,
+    days,
+    places,
+    packingItems,
+    todoItems,
+    budgetItems,
+    reservations,
+    files,
+    accommodations,
+    members: allMembers,
+  });
 });
 
 // ── ICS calendar export ───────────────────────────────────────────────────

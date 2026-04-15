@@ -1,7 +1,18 @@
-import { XMLParser } from 'fast-xml-parser';
+import { XMLParser, XMLValidator } from 'fast-xml-parser';
+import unzipper from 'unzipper';
 import { db, getPlaceWithTags } from '../db/database';
 import { loadTagsByPlaceIds } from './queryHelpers';
+import { checkSsrf } from '../utils/ssrfGuard';
 import { Place } from '../types';
+import {
+  buildCategoryNameLookup,
+  createKmlImportSummary,
+  decodeUtf8WithWarning,
+  extractKmlPlacemarkNodes,
+  parsePlacemarkNode,
+  resolveCategoryIdForFolder,
+  type KmlImportSummary,
+} from './kmlImport';
 
 interface PlaceWithCategory extends Place {
   category_name: string | null;
@@ -12,6 +23,12 @@ interface PlaceWithCategory extends Place {
 interface UnsplashSearchResponse {
   results?: { id: string; urls?: { regular?: string; thumb?: string }; description?: string; alt_description?: string; user?: { name?: string }; links?: { html?: string } }[];
   errors?: string[];
+}
+
+export interface PlaceImportResult {
+  places: any[];
+  count: number;
+  summary: KmlImportSummary;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,6 +250,82 @@ const gpxParser = new XMLParser({
   isArray: (name) => ['wpt', 'trkpt', 'rtept', 'trk', 'trkseg', 'rte'].includes(name),
 });
 
+const kmlParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  removeNSPrefix: true,
+  isArray: (name) => ['Placemark', 'Folder', 'Document'].includes(name),
+  // Treat <description> as raw text so mixed-content HTML (e.g. <br/>, <i>)
+  // is returned as a string instead of a parsed object.
+  stopNodes: ['*.description'],
+});
+
+export const KMZ_DECOMPRESSED_SIZE_LIMIT = 50 * 1024 * 1024; // 50 MB
+
+// ---------------------------------------------------------------------------
+// Import deduplication helpers
+// ---------------------------------------------------------------------------
+
+const COORD_DEDUP_TOLERANCE = 0.0001; // ≈ 11 m
+
+interface DedupSet {
+  names: Set<string>;
+  coords: Array<{ lat: number; lng: number }>;
+}
+
+/** Build a lookup of names/coords for places already in a trip. */
+function buildDedupSet(tripId: string): DedupSet {
+  const rows = db.prepare('SELECT name, lat, lng FROM places WHERE trip_id = ?').all(tripId) as Array<{
+    name: string | null;
+    lat: number | null;
+    lng: number | null;
+  }>;
+  const names = new Set<string>();
+  const coords: Array<{ lat: number; lng: number }> = [];
+  for (const row of rows) {
+    if (row.name) {
+      names.add(row.name.trim().toLowerCase());
+    } else if (row.lat != null && row.lng != null) {
+      coords.push({ lat: row.lat, lng: row.lng });
+    }
+  }
+  return { names, coords };
+}
+
+/**
+ * Returns true if a candidate place is already represented in the dedup set.
+ * Named places match by case-insensitive name; unnamed places fall back to
+ * coordinate proximity.
+ */
+function isPlaceDuplicate(
+  candidate: { name: string | null | undefined; lat: number | null; lng: number | null },
+  dedup: DedupSet,
+): boolean {
+  const normalizedName = candidate.name?.trim().toLowerCase();
+  if (normalizedName) return dedup.names.has(normalizedName);
+  if (candidate.lat != null && candidate.lng != null) {
+    return dedup.coords.some(
+      (c) =>
+        Math.abs(c.lat - candidate.lat!) <= COORD_DEDUP_TOLERANCE &&
+        Math.abs(c.lng - candidate.lng!) <= COORD_DEDUP_TOLERANCE,
+    );
+  }
+  return false;
+}
+
+/** Record a newly inserted place so subsequent candidates in the same batch are checked against it. */
+function trackInsertedInDedupSet(
+  place: { name: string | null | undefined; lat: number | null; lng: number | null },
+  dedup: DedupSet,
+): void {
+  const normalizedName = place.name?.trim().toLowerCase();
+  if (normalizedName) {
+    dedup.names.add(normalizedName);
+  } else if (place.lat != null && place.lng != null) {
+    dedup.coords.push({ lat: place.lat, lng: place.lng });
+  }
+}
+
 export function importGpx(tripId: string, fileBuffer: Buffer) {
   const parsed = gpxParser.parse(fileBuffer.toString('utf-8'));
   const gpx = parsed?.gpx;
@@ -284,21 +377,153 @@ export function importGpx(tripId: string, fileBuffer: Buffer) {
 
   if (waypoints.length === 0) return null;
 
+  const dedup = buildDedupSet(tripId);
   const insertStmt = db.prepare(`
     INSERT INTO places (trip_id, name, description, lat, lng, transport_mode, route_geometry)
     VALUES (?, ?, ?, ?, ?, 'walking', ?)
   `);
   const created: any[] = [];
+  let skipped = 0;
   const insertAll = db.transaction(() => {
     for (const wp of waypoints) {
+      if (isPlaceDuplicate({ name: wp.name, lat: wp.lat, lng: wp.lng }, dedup)) {
+        skipped++;
+        continue;
+      }
       const result = insertStmt.run(tripId, wp.name, wp.description, wp.lat, wp.lng, wp.routeGeometry || null);
       const place = getPlaceWithTags(Number(result.lastInsertRowid));
       created.push(place);
+      trackInsertedInDedupSet({ name: wp.name, lat: wp.lat, lng: wp.lng }, dedup);
     }
   });
   insertAll();
 
-  return created;
+  return { places: created, count: created.length, skipped };
+}
+
+export function importKmlPlaces(tripId: string, fileBuffer: Buffer): PlaceImportResult {
+  const decoded = decodeUtf8WithWarning(fileBuffer);
+
+  const validationResult = XMLValidator.validate(decoded.text);
+  if (validationResult !== true) {
+    throw new Error('Malformed KML: invalid XML structure');
+  }
+
+  const parsed = kmlParser.parse(decoded.text);
+  const kmlRoot = parsed?.kml ?? parsed;
+
+  if (!kmlRoot || typeof kmlRoot !== 'object') {
+    throw new Error('Malformed KML: could not parse XML');
+  }
+
+  const placemarkNodes = extractKmlPlacemarkNodes(kmlRoot);
+  const summary = createKmlImportSummary(placemarkNodes.length);
+
+  if (decoded.warning) {
+    summary.warnings.push(decoded.warning);
+  }
+
+  const categories = db.prepare('SELECT id, name FROM categories').all() as { id: number; name: string }[];
+  const categoryLookup = buildCategoryNameLookup(categories);
+  const dedup = buildDedupSet(tripId);
+  const created: any[] = [];
+  let dupCount = 0;
+
+  const insertStmt = db.prepare(`
+    INSERT INTO places (trip_id, name, description, lat, lng, category_id, transport_mode)
+    VALUES (?, ?, ?, ?, ?, ?, 'walking')
+  `);
+
+  const insertAll = db.transaction(() => {
+    let fallbackIndex = 1;
+    for (const node of placemarkNodes) {
+      const parsedPlacemark = parsePlacemarkNode(node);
+
+      // KML geometry support is intentionally limited to <Placemark><Point> coordinates.
+      if (parsedPlacemark.lat === null || parsedPlacemark.lng === null) {
+        summary.skippedCount += 1;
+        summary.errors.push(`Skipped Placemark ${fallbackIndex}: missing Point coordinates.`);
+        fallbackIndex += 1;
+        continue;
+      }
+
+      const fallbackName = `Placemark ${fallbackIndex}`;
+      const name = parsedPlacemark.name || fallbackName;
+
+      if (isPlaceDuplicate({ name, lat: parsedPlacemark.lat, lng: parsedPlacemark.lng }, dedup)) {
+        summary.skippedCount += 1;
+        dupCount++;
+        fallbackIndex += 1;
+        continue;
+      }
+
+      const categoryId = resolveCategoryIdForFolder(parsedPlacemark.folderName, categoryLookup);
+
+      const result = insertStmt.run(
+        tripId,
+        name,
+        parsedPlacemark.description,
+        parsedPlacemark.lat,
+        parsedPlacemark.lng,
+        categoryId,
+      );
+
+      const place = getPlaceWithTags(Number(result.lastInsertRowid));
+      created.push(place);
+      trackInsertedInDedupSet({ name, lat: parsedPlacemark.lat, lng: parsedPlacemark.lng }, dedup);
+      summary.createdCount += 1;
+      fallbackIndex += 1;
+    }
+  });
+
+  insertAll();
+
+  if (dupCount > 0) {
+    summary.warnings.push(`${dupCount} place${dupCount > 1 ? 's' : ''} skipped (already in trip).`);
+  }
+
+  if (summary.totalPlacemarks === 0) {
+    summary.errors.push('No Placemarks found in KML file.');
+  }
+
+  return { places: created, count: created.length, summary };
+}
+
+export async function unpackKmzToKml(
+  kmzBuffer: Buffer,
+  decompressedSizeLimit = KMZ_DECOMPRESSED_SIZE_LIMIT,
+): Promise<Buffer> {
+  let zip;
+  try {
+    zip = await unzipper.Open.buffer(kmzBuffer);
+  } catch {
+    throw new Error('Invalid KMZ archive.');
+  }
+
+  const kmlEntries = zip.files.filter((entry) => !entry.path.endsWith('/') && entry.path.toLowerCase().endsWith('.kml'));
+  if (kmlEntries.length === 0) {
+    throw new Error('KMZ archive does not contain a KML file.');
+  }
+
+  const preferredEntry = kmlEntries.find((entry) => entry.path.toLowerCase().endsWith('doc.kml')) || kmlEntries[0];
+
+  if (preferredEntry.uncompressedSize > decompressedSizeLimit) {
+    throw new Error('KMZ archive exceeds the maximum allowed decompressed size.');
+  }
+
+  return preferredEntry.buffer();
+}
+
+export async function importKmzPlaces(tripId: string, kmzBuffer: Buffer): Promise<PlaceImportResult> {
+  const kmlBuffer = await unpackKmzToKml(kmzBuffer);
+  return importKmlPlaces(tripId, kmlBuffer);
+}
+
+export async function importMapFile(tripId: string, fileBuffer: Buffer, filename: string): Promise<PlaceImportResult> {
+  const ext = filename.toLowerCase().split('.').pop();
+  if (ext === 'kmz') return importKmzPlaces(tripId, fileBuffer);
+  if (ext === 'kml') return importKmlPlaces(tripId, fileBuffer);
+  throw new Error(`Unsupported map file format: .${ext}. Please upload a .kml or .kmz file.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +533,10 @@ export function importGpx(tripId: string, fileBuffer: Buffer) {
 export async function importGoogleList(tripId: string, url: string) {
   let listId: string | null = null;
   let resolvedUrl = url;
+
+  // SSRF guard: validate user-supplied URL before fetching
+  const ssrf = await checkSsrf(url);
+  if (!ssrf.allowed) return { error: 'URL is not allowed', status: 400 };
 
   // Follow redirects for short URLs (maps.app.goo.gl, goo.gl)
   if (url.includes('goo.gl') || url.includes('maps.app')) {
@@ -374,22 +603,150 @@ export async function importGoogleList(tripId: string, url: string) {
     return { error: 'No places with coordinates found in list', status: 400 };
   }
 
-  // Insert places into trip
+  const dedup = buildDedupSet(tripId);
   const insertStmt = db.prepare(`
     INSERT INTO places (trip_id, name, lat, lng, notes, transport_mode)
     VALUES (?, ?, ?, ?, ?, 'walking')
   `);
   const created: any[] = [];
+  let skipped = 0;
   const insertAll = db.transaction(() => {
     for (const p of places) {
+      if (isPlaceDuplicate({ name: p.name, lat: p.lat, lng: p.lng }, dedup)) {
+        skipped++;
+        continue;
+      }
       const result = insertStmt.run(tripId, p.name, p.lat, p.lng, p.notes);
       const place = getPlaceWithTags(Number(result.lastInsertRowid));
       created.push(place);
+      trackInsertedInDedupSet({ name: p.name, lat: p.lat, lng: p.lng }, dedup);
     }
   });
   insertAll();
 
-  return { places: created, listName };
+  return { places: created, listName, skipped };
+}
+
+// ---------------------------------------------------------------------------
+// Import Naver Maps list
+// ---------------------------------------------------------------------------
+
+export async function importNaverList(
+  tripId: string,
+  url: string,
+): Promise<{ places: any[]; listName: string } | { error: string; status: number }> {
+  let resolvedUrl = url;
+  const limit = 20;
+
+  // SSRF guard: validate user-supplied URL before fetching
+  const ssrf = await checkSsrf(url);
+  if (!ssrf.allowed) return { error: 'URL is not allowed', status: 400 };
+
+  // Resolve naver.me short links to the canonical map.naver.com folder URL.
+  let parsedUrl: URL;
+  try { parsedUrl = new URL(url); } catch { return { error: 'Invalid URL', status: 400 }; }
+  if (parsedUrl.hostname === 'naver.me') {
+    const redirectRes = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(10000) });
+    resolvedUrl = redirectRes.url;
+  }
+
+  const folderMatch = resolvedUrl.match(/favorite\/myPlace\/folder\/([A-Za-z0-9_-]+)/i);
+  const folderId = folderMatch?.[1] || null;
+  if (!folderId) {
+    return { error: 'Could not extract folder ID from URL. Please use a shared Naver Maps list link.', status: 400 };
+  }
+
+  const fetchPage = async (start: number) => {
+    const apiUrl = `https://pages.map.naver.com/save-pages/api/maps-bookmark/v3/shares/${encodeURIComponent(folderId)}/bookmarks?placeInfo=true&start=${start}&limit=${limit}&sort=lastUseTime&mcids=ALL&createIdNo=true`;
+    const apiRes = await fetch(apiUrl, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!apiRes.ok) {
+      return { error: 'Failed to fetch list from Naver Maps', status: 502 } as const;
+    }
+
+    try {
+      const data = await apiRes.json() as {
+        folder?: { bookmarkCount?: number; name?: string };
+        bookmarkList?: any[];
+      };
+      return { data } as const;
+    } catch {
+      return { error: 'Invalid list data received from Naver Maps', status: 400 } as const;
+    }
+  };
+
+  const firstPage = await fetchPage(0);
+  if ('error' in firstPage) {
+    return { error: firstPage.error, status: firstPage.status };
+  }
+
+  const listName = firstPage.data.folder?.name || 'Naver Maps List';
+  const totalCount = typeof firstPage.data.folder?.bookmarkCount === 'number'
+    ? firstPage.data.folder.bookmarkCount
+    : (firstPage.data.bookmarkList?.length || 0);
+
+  const allItems: any[] = [...(firstPage.data.bookmarkList || [])];
+  for (let start = limit; start < totalCount; start += limit) {
+    const page = await fetchPage(start);
+    if ('error' in page) {
+      return { error: page.error, status: page.status };
+    }
+    const pageItems = page.data.bookmarkList || [];
+    if (!Array.isArray(pageItems) || pageItems.length === 0) break;
+    allItems.push(...pageItems);
+  }
+
+  if (allItems.length === 0) {
+    return { error: 'List is empty or could not be read', status: 400 };
+  }
+
+  const places: { name: string; lat: number; lng: number; notes: string | null; address: string | null }[] = [];
+  for (const item of allItems) {
+    const lat = Number(item?.py);
+    const lng = Number(item?.px);
+    const name = typeof item?.name === 'string' && item.name.trim()
+      ? item.name.trim()
+      : (typeof item?.displayName === 'string' ? item.displayName.trim() : '');
+    const note = typeof item?.memo === 'string' && item.memo.trim() ? item.memo.trim() : null;
+    const address = typeof item?.address === 'string' && item.address.trim() ? item.address.trim() : null;
+
+    if (name && Number.isFinite(lat) && Number.isFinite(lng)) {
+      places.push({ name, lat, lng, notes: note, address });
+    }
+  }
+
+  if (places.length === 0) {
+    return { error: 'No places with coordinates found in list', status: 400 };
+  }
+
+  const dedup = buildDedupSet(tripId);
+  const insertStmt = db.prepare(`
+    INSERT INTO places (trip_id, name, lat, lng, address, notes, transport_mode)
+    VALUES (?, ?, ?, ?, ?, ?, 'walking')
+  `);
+  const created: any[] = [];
+  let skipped = 0;
+  const insertAll = db.transaction(() => {
+    for (const p of places) {
+      if (isPlaceDuplicate({ name: p.name, lat: p.lat, lng: p.lng }, dedup)) {
+        skipped++;
+        continue;
+      }
+      const result = insertStmt.run(tripId, p.name, p.lat, p.lng, p.address, p.notes);
+      const place = getPlaceWithTags(Number(result.lastInsertRowid));
+      created.push(place);
+      trackInsertedInDedupSet({ name: p.name, lat: p.lat, lng: p.lng }, dedup);
+    }
+  });
+  insertAll();
+
+  return { places: created, listName, skipped };
 }
 
 // ---------------------------------------------------------------------------

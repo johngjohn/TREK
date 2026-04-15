@@ -14,7 +14,7 @@ import PlaceFormModal from '../components/Planner/PlaceFormModal'
 import TripFormModal from '../components/Trips/TripFormModal'
 import TripMembersModal from '../components/Trips/TripMembersModal'
 import { ReservationModal } from '../components/Planner/ReservationModal'
-import MemoriesPanel from '../components/Memories/MemoriesPanel'
+// MemoriesPanel moved to Journey addon
 import ReservationsPanel from '../components/Planner/ReservationsPanel'
 import PackingListPanel from '../components/Packing/PackingListPanel'
 import TodoListPanel from '../components/Todo/TodoListPanel'
@@ -23,9 +23,11 @@ import BudgetPanel from '../components/Budget/BudgetPanel'
 import CollabPanel from '../components/Collab/CollabPanel'
 import Navbar from '../components/Layout/Navbar'
 import { useToast } from '../components/shared/Toast'
-import { Map, X, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Ticket, PackageCheck, Wallet, FolderOpen, Camera, Users } from 'lucide-react'
+import { Map, X, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Ticket, PackageCheck, Wallet, FolderOpen, Users } from 'lucide-react'
 import { useTranslation } from '../i18n'
 import { addonsApi, accommodationsApi, authApi, tripsApi, assignmentsApi, mapsApi } from '../api/client'
+import { accommodationRepo } from '../repo/accommodationRepo'
+import { offlineDb } from '../db/offlineDb'
 import ConfirmDialog from '../components/shared/ConfirmDialog'
 import { useResizablePanels } from '../hooks/useResizablePanels'
 import { useTripWebSocket } from '../hooks/useTripWebSocket'
@@ -97,14 +99,14 @@ export default function TripPlannerPage(): React.ReactElement | null {
     toast.info(t('undo.done', { action: label ?? '' }))
   }, [undo, lastActionLabel, toast])
 
-  const [enabledAddons, setEnabledAddons] = useState<Record<string, boolean>>({ packing: true, budget: true, documents: true })
+  const [enabledAddons, setEnabledAddons] = useState<Record<string, boolean>>({ packing: true, budget: true, documents: true, collab: false })
   const [tripAccommodations, setTripAccommodations] = useState<Accommodation[]>([])
   const [allowedFileTypes, setAllowedFileTypes] = useState<string | null>(null)
   const [tripMembers, setTripMembers] = useState<TripMember[]>([])
 
   const loadAccommodations = useCallback(() => {
     if (tripId) {
-      accommodationsApi.list(tripId).then(d => setTripAccommodations(d.accommodations || [])).catch(() => {})
+      accommodationRepo.list(tripId).then(d => setTripAccommodations(d.accommodations || [])).catch(() => {})
       tripActions.loadReservations(tripId)
     }
   }, [tripId])
@@ -113,9 +115,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
     addonsApi.enabled().then(data => {
       const map = {}
       data.addons.forEach(a => { map[a.id] = true })
-      // Check if any photo provider is enabled (for memories tab to show)
-      const hasPhotoProviders = data.addons.some(a => a.type === 'photo_provider')
-      setEnabledAddons({ packing: !!map.packing, budget: !!map.budget, documents: !!map.documents, collab: !!map.collab, memories: hasPhotoProviders })
+      setEnabledAddons({ packing: !!map.packing, budget: !!map.budget, documents: !!map.documents, collab: !!map.collab })
     }).catch(() => {})
     authApi.getAppConfig().then(config => {
       if (config.allowed_file_types) setAllowedFileTypes(config.allowed_file_types)
@@ -128,7 +128,6 @@ export default function TripPlannerPage(): React.ReactElement | null {
     ...(enabledAddons.packing ? [{ id: 'listen', label: t('trip.tabs.lists'), shortLabel: t('trip.tabs.listsShort'), icon: PackageCheck }] : []),
     ...(enabledAddons.budget ? [{ id: 'finanzplan', label: t('trip.tabs.budget'), icon: Wallet }] : []),
     ...(enabledAddons.documents ? [{ id: 'dateien', label: t('trip.tabs.files'), icon: FolderOpen }] : []),
-    ...(enabledAddons.memories ? [{ id: 'memories', label: t('memories.title'), icon: Camera }] : []),
     ...(enabledAddons.collab ? [{ id: 'collab', label: t('admin.addons.catalog.collab.name'), icon: Users }] : []),
   ]
 
@@ -195,11 +194,16 @@ export default function TripPlannerPage(): React.ReactElement | null {
       tripActions.loadTrip(tripId).catch(() => { toast.error(t('trip.toast.loadError')); navigate('/dashboard') })
       tripActions.loadFiles(tripId)
       loadAccommodations()
-      tripsApi.getMembers(tripId).then(d => {
-        // Combine owner + members into one list
-        const all = [d.owner, ...(d.members || [])].filter(Boolean)
-        setTripMembers(all)
-      }).catch(() => {})
+      if (!navigator.onLine) {
+        offlineDb.tripMembers.where('tripId').equals(Number(tripId)).toArray()
+          .then(rows => setTripMembers(rows))
+          .catch(() => {})
+      } else {
+        tripsApi.getMembers(tripId).then(d => {
+          const all = [d.owner, ...(d.members || [])].filter(Boolean)
+          setTripMembers(all)
+        }).catch(() => {})
+      }
     }
   }, [tripId])
 
@@ -209,7 +213,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
 
   useTripWebSocket(tripId)
 
-  const [mapCategoryFilter, setMapCategoryFilter] = useState<string>('')
+  const [mapCategoryFilter, setMapCategoryFilter] = useState<Set<string>>(new Set())
   const [mapPlacesFilter, setMapPlacesFilter] = useState<string>('all')
 
   const [expandedDayIds, setExpandedDayIds] = useState<Set<number> | null>(null)
@@ -242,7 +246,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
 
     return places.filter(p => {
       if (!p.lat || !p.lng) return false
-      if (mapCategoryFilter && String(p.category_id) !== String(mapCategoryFilter)) return false
+      if (mapCategoryFilter.size > 0 && !mapCategoryFilter.has(String(p.category_id))) return false
       if (hiddenPlaceIds.has(p.id)) return false
       if (plannedIds && plannedIds.has(p.id)) return false
       return true
@@ -369,7 +373,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
           }
         })
       }
-    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Unknown error') }
+    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : t('common.unknownError')) }
   }, [deletePlaceId, tripId, toast, selectedPlaceId, pushUndo])
 
   const handleAssignToDay = useCallback(async (placeId, dayId, position) => {
@@ -386,7 +390,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
           await tripActions.removeAssignment(tripId, capturedTarget, capturedAssignmentId)
         })
       }
-    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Unknown error') }
+    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : t('common.unknownError')) }
   }, [selectedDayId, tripId, toast, updateRouteForDay, pushUndo])
 
   const handleRemoveAssignment = useCallback(async (dayId, assignmentId) => {
@@ -404,7 +408,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
         })
       }
     }
-    catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Unknown error') }
+    catch (err: unknown) { toast.error(err instanceof Error ? err.message : t('common.unknownError')) }
   }, [tripId, toast, updateRouteForDay, pushUndo])
 
   const handleReorder = useCallback((dayId, orderedIds) => {
@@ -433,7 +437,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
 
   const handleUpdateDayTitle = useCallback(async (dayId, title) => {
     try { await tripActions.updateDayTitle(tripId, dayId, title) }
-    catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Unknown error') }
+    catch (err: unknown) { toast.error(err instanceof Error ? err.message : t('common.unknownError')) }
   }, [tripId, toast])
 
   const handleSaveReservation = async (data) => {
@@ -456,7 +460,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
         }
         return r
       }
-    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Unknown error') }
+    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : t('common.unknownError')) }
   }
 
   const handleDeleteReservation = async (id) => {
@@ -466,7 +470,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
       // Refresh accommodations in case a hotel booking was deleted
       accommodationsApi.list(tripId).then(d => setTripAccommodations(d.accommodations || [])).catch(() => {})
     }
-    catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Unknown error') }
+    catch (err: unknown) { toast.error(err instanceof Error ? err.message : t('common.unknownError')) }
   }
 
   const selectedPlace = selectedPlaceId ? places.find(p => p.id === selectedPlaceId) : null
@@ -821,7 +825,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
                     }))
                   } catch {}
                 }}
-                onUpdatePlace={async (placeId, data) => { try { await tripActions.updatePlace(tripId, placeId, data) } catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Unknown error') } }}
+                onUpdatePlace={async (placeId, data) => { try { await tripActions.updatePlace(tripId, placeId, data) } catch (err: unknown) { toast.error(err instanceof Error ? err.message : t('common.unknownError')) } }}
                 leftWidth={(isMobile || window.innerWidth < 900) ? 0 : (leftCollapsed ? 0 : leftWidth)}
                 rightWidth={(isMobile || window.innerWidth < 900) ? 0 : (rightCollapsed ? 0 : rightWidth)}
               />
@@ -870,7 +874,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
                         }))
                       } catch {}
                     }}
-                    onUpdatePlace={async (placeId, data) => { try { await tripActions.updatePlace(tripId, placeId, data) } catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Unknown error') } }}
+                    onUpdatePlace={async (placeId, data) => { try { await tripActions.updatePlace(tripId, placeId, data) } catch (err: unknown) { toast.error(err instanceof Error ? err.message : t('common.unknownError')) } }}
                     leftWidth={0}
                     rightWidth={0}
                   />
@@ -890,7 +894,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
                   </div>
                   <div style={{ flex: 1, overflow: 'auto' }}>
                     {mobileSidebarOpen === 'left'
-                      ? <DayPlanSidebar tripId={tripId} trip={trip} days={days} places={places} categories={categories} assignments={assignments} selectedDayId={selectedDayId} selectedPlaceId={selectedPlaceId} selectedAssignmentId={selectedAssignmentId} onSelectDay={(id) => { handleSelectDay(id); setMobileSidebarOpen(null) }} onPlaceClick={(placeId, assignmentId) => { handlePlaceClick(placeId, assignmentId); setMobileSidebarOpen(null) }} onReorder={handleReorder} onUpdateDayTitle={handleUpdateDayTitle} onAssignToDay={handleAssignToDay} onRouteCalculated={(r) => { if (r) { setRoute(r.coordinates); setRouteInfo({ distance: r.distanceText, duration: r.durationText }) } }} reservations={reservations} onAddReservation={(dayId) => { setEditingReservation(null); tripActions.setSelectedDay(dayId); setShowReservationModal(true); setMobileSidebarOpen(null) }} onDayDetail={(day) => { setShowDayDetail(day); setSelectedPlaceId(null); setSelectedAssignmentId(null); setMobileSidebarOpen(null) }} accommodations={tripAccommodations} onNavigateToFiles={() => { setMobileSidebarOpen(null); handleTabChange('dateien') }} onExpandedDaysChange={setExpandedDayIds} pushUndo={pushUndo} canUndo={canUndo} lastActionLabel={lastActionLabel} onUndo={handleUndo} />
+                      ? <DayPlanSidebar tripId={tripId} trip={trip} days={days} places={places} categories={categories} assignments={assignments} selectedDayId={selectedDayId} selectedPlaceId={selectedPlaceId} selectedAssignmentId={selectedAssignmentId} onSelectDay={(id) => { handleSelectDay(id); setMobileSidebarOpen(null) }} onPlaceClick={(placeId, assignmentId) => { handlePlaceClick(placeId, assignmentId); setMobileSidebarOpen(null) }} onReorder={handleReorder} onUpdateDayTitle={handleUpdateDayTitle} onAssignToDay={handleAssignToDay} onRouteCalculated={(r) => { if (r) { setRoute(r.coordinates); setRouteInfo({ distance: r.distanceText, duration: r.durationText }) } }} reservations={reservations} onAddReservation={(dayId) => { setEditingReservation(null); tripActions.setSelectedDay(dayId); setShowReservationModal(true); setMobileSidebarOpen(null) }} onAddPlace={() => { setEditingPlace(null); setShowPlaceForm(true); setMobileSidebarOpen(null) }} onDayDetail={(day) => { setShowDayDetail(day); setSelectedPlaceId(null); setSelectedAssignmentId(null); setMobileSidebarOpen(null) }} accommodations={tripAccommodations} onNavigateToFiles={() => { setMobileSidebarOpen(null); handleTabChange('dateien') }} onExpandedDaysChange={setExpandedDayIds} pushUndo={pushUndo} canUndo={canUndo} lastActionLabel={lastActionLabel} onUndo={handleUndo} />
                       : <PlacesSidebar tripId={tripId} places={places} categories={categories} assignments={assignments} selectedDayId={selectedDayId} selectedPlaceId={selectedPlaceId} onPlaceClick={(placeId) => { handlePlaceClick(placeId); setMobileSidebarOpen(null) }} onAddPlace={() => { setEditingPlace(null); setShowPlaceForm(true); setMobileSidebarOpen(null) }} onAssignToDay={handleAssignToDay} onEditPlace={(place) => { setEditingPlace(place); setEditingAssignmentId(null); setShowPlaceForm(true); setMobileSidebarOpen(null) }} onDeletePlace={(placeId) => handleDeletePlace(placeId)} days={days} isMobile onCategoryFilterChange={setMapCategoryFilter} onPlacesFilterChange={setMapPlacesFilter} pushUndo={pushUndo} />
                     }
                   </div>
@@ -902,7 +906,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
         )}
 
         {activeTab === 'buchungen' && (
-          <div style={{ height: '100%', maxWidth: 1200, margin: '0 auto', width: '100%', display: 'flex', flexDirection: 'column', overflowY: 'auto', overscrollBehavior: 'contain' }}>
+          <div style={{ height: '100%', maxWidth: 1200, margin: '0 auto', width: '100%', display: 'flex', flexDirection: 'column', overflowY: 'auto', overscrollBehavior: 'contain', paddingBottom: 'var(--bottom-nav-h)' }}>
             <ReservationsPanel
               tripId={tripId}
               reservations={reservations}
@@ -918,13 +922,13 @@ export default function TripPlannerPage(): React.ReactElement | null {
         )}
 
         {activeTab === 'listen' && (
-          <div style={{ height: '100%', overflowY: 'auto', overscrollBehavior: 'contain', maxWidth: 1800, margin: '0 auto', width: '100%', padding: '8px 0' }}>
+          <div style={{ height: '100%', overflowY: 'auto', overscrollBehavior: 'contain', maxWidth: 1800, margin: '0 auto', width: '100%', padding: '8px 0', paddingBottom: 'calc(var(--bottom-nav-h) + 8px)' }}>
             <ListsContainer tripId={tripId} packingItems={packingItems} todoItems={todoItems} />
           </div>
         )}
 
         {activeTab === 'finanzplan' && (
-          <div style={{ height: '100%', overflowY: 'auto', overscrollBehavior: 'contain', maxWidth: 1800, margin: '0 auto', width: '100%', padding: '8px 0' }}>
+          <div style={{ height: '100%', overflowY: 'auto', overscrollBehavior: 'contain', maxWidth: 1800, margin: '0 auto', width: '100%', padding: '8px 0', paddingBottom: 'calc(var(--bottom-nav-h) + 8px)' }}>
             <BudgetPanel tripId={tripId} tripMembers={tripMembers} />
           </div>
         )}
@@ -943,12 +947,6 @@ export default function TripPlannerPage(): React.ReactElement | null {
               tripId={tripId}
               allowedFileTypes={allowedFileTypes}
             />
-          </div>
-        )}
-
-        {activeTab === 'memories' && (
-          <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
-            <MemoriesPanel tripId={Number(tripId)} startDate={trip?.start_date || null} endDate={trip?.end_date || null} />
           </div>
         )}
 

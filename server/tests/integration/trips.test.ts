@@ -49,7 +49,7 @@ import { createApp } from '../../src/app';
 import { createTables } from '../../src/db/schema';
 import { runMigrations } from '../../src/db/migrations';
 import { resetTestDb } from '../helpers/test-db';
-import { createUser, createAdmin, createTrip, addTripMember, createPlace, createReservation, createTag, createDayAccommodation, createBudgetItem, createPackingItem, createDayNote } from '../helpers/factories';
+import { createUser, createAdmin, createTrip, addTripMember, createPlace, createReservation, createTag, createDayAccommodation, createBudgetItem, createPackingItem, createDayNote, createDayAssignment } from '../helpers/factories';
 import { authCookie } from '../helpers/auth';
 import { loginAttempts, mfaAttempts } from '../../src/routes/auth';
 import { invalidatePermissionsCache } from '../../src/services/permissions';
@@ -429,6 +429,65 @@ describe('Update trip', () => {
       .send({ title: 'Ghost Update' });
 
     expect(res.status).toBe(404);
+  });
+
+  it('TRIP-023 — Shifting trip date range preserves day assignments positionally', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id, { start_date: '2026-08-01', end_date: '2026-08-05' });
+
+    const days = testDb.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(trip.id) as { id: number; date: string }[];
+    expect(days).toHaveLength(5);
+
+    const place = createPlace(testDb, trip.id);
+    const assignment = createDayAssignment(testDb, days[0].id, place.id);
+    const note = createDayNote(testDb, days[1].id, trip.id, { text: 'pack sunscreen' });
+
+    // Shift forward 10 days (zero overlap with original range)
+    const res = await request(app)
+      .put(`/api/trips/${trip.id}`)
+      .set('Cookie', authCookie(user.id))
+      .send({ start_date: '2026-08-11', end_date: '2026-08-15' });
+
+    expect(res.status).toBe(200);
+
+    const daysAfter = testDb.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(trip.id) as { id: number; date: string | null }[];
+    expect(daysAfter).toHaveLength(5);
+    expect(daysAfter.map(d => d.date)).toEqual(['2026-08-11', '2026-08-12', '2026-08-13', '2026-08-14', '2026-08-15']);
+
+    const assignmentsAfter = testDb.prepare('SELECT * FROM day_assignments WHERE id = ?').get(assignment.id) as { day_id: number } | undefined;
+    expect(assignmentsAfter).toBeDefined();
+    expect(assignmentsAfter!.day_id).toBe(daysAfter[0].id);
+
+    const notesAfter = testDb.prepare('SELECT * FROM day_notes WHERE id = ?').get(note.id) as { day_id: number } | undefined;
+    expect(notesAfter).toBeDefined();
+    expect(notesAfter!.day_id).toBe(daysAfter[1].id);
+  });
+
+  it('TRIP-024 — Shrinking trip date range keeps overflow days as dateless with content intact', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id, { start_date: '2026-09-01', end_date: '2026-09-05' });
+
+    const days = testDb.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(trip.id) as { id: number }[];
+    const place = createPlace(testDb, trip.id);
+    const a4 = createDayAssignment(testDb, days[3].id, place.id);
+    const a5 = createDayAssignment(testDb, days[4].id, place.id);
+
+    // Shrink from 5 to 3 days
+    const res = await request(app)
+      .put(`/api/trips/${trip.id}`)
+      .set('Cookie', authCookie(user.id))
+      .send({ start_date: '2026-09-01', end_date: '2026-09-03' });
+
+    expect(res.status).toBe(200);
+
+    const daysAfter = testDb.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(trip.id) as { id: number; date: string | null }[];
+    expect(daysAfter).toHaveLength(5);
+    expect(daysAfter.filter(d => d.date !== null)).toHaveLength(3);
+    expect(daysAfter.filter(d => d.date === null)).toHaveLength(2);
+
+    // Overflow assignments survived
+    const all = testDb.prepare('SELECT * FROM day_assignments WHERE id IN (?, ?)').all(a4.id, a5.id) as { id: number }[];
+    expect(all).toHaveLength(2);
   });
 });
 
@@ -890,5 +949,77 @@ describe('Copy trip with data', () => {
     const newNotes = testDb.prepare('SELECT * FROM day_notes WHERE trip_id = ?').all(newId) as any[];
     expect(newNotes).toHaveLength(1);
     expect(newNotes[0].text).toBe('Pack early!');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bundle endpoint — GET /api/trips/:id/bundle
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Trip bundle', () => {
+  it('BUNDLE-001 — returns all sub-collections for owned trip', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id, { start_date: '2026-07-01', end_date: '2026-07-03' });
+
+    const res = await request(app)
+      .get(`/api/trips/${trip.id}/bundle`)
+      .set('Cookie', authCookie(user.id));
+
+    expect(res.status).toBe(200);
+    expect(res.body.trip).toBeDefined();
+    expect(res.body.trip.id).toBe(trip.id);
+    expect(Array.isArray(res.body.days)).toBe(true);
+    expect(res.body.days).toHaveLength(3);
+    expect(Array.isArray(res.body.places)).toBe(true);
+    expect(Array.isArray(res.body.packingItems)).toBe(true);
+    expect(Array.isArray(res.body.todoItems)).toBe(true);
+    expect(Array.isArray(res.body.budgetItems)).toBe(true);
+    expect(Array.isArray(res.body.reservations)).toBe(true);
+    expect(Array.isArray(res.body.files)).toBe(true);
+  });
+
+  it('BUNDLE-002 — returns 404 for trip that does not exist', async () => {
+    const { user } = createUser(testDb);
+
+    const res = await request(app)
+      .get('/api/trips/999999/bundle')
+      .set('Cookie', authCookie(user.id));
+
+    expect(res.status).toBe(404);
+  });
+
+  it('BUNDLE-003 — returns 404 when user has no access to trip', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: other } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+
+    const res = await request(app)
+      .get(`/api/trips/${trip.id}/bundle`)
+      .set('Cookie', authCookie(other.id));
+
+    expect(res.status).toBe(404);
+  });
+
+  it('BUNDLE-004 — members can fetch bundle', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    testDb.prepare('INSERT INTO trip_members (trip_id, user_id) VALUES (?, ?)').run(trip.id, member.id);
+
+    const res = await request(app)
+      .get(`/api/trips/${trip.id}/bundle`)
+      .set('Cookie', authCookie(member.id));
+
+    expect(res.status).toBe(200);
+    expect(res.body.trip.id).toBe(trip.id);
+  });
+
+  it('BUNDLE-005 — returns 401 when unauthenticated', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+
+    const res = await request(app).get(`/api/trips/${trip.id}/bundle`);
+
+    expect(res.status).toBe(401);
   });
 });

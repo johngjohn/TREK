@@ -7,6 +7,7 @@ import {
     getSynologyStatus,
     testSynologyConnection,
     listSynologyAlbums,
+    getSynologyAlbumPhotos,
     syncSynologyAlbumLink,
     searchSynologyPhotos,
     getSynologyAssetInfo,
@@ -36,12 +37,13 @@ router.put('/settings', authenticate, async (req: Request, res: Response) => {
     const synology_url = _parseStringBodyField(body.synology_url);
     const synology_username = _parseStringBodyField(body.synology_username);
     const synology_password = _parseStringBodyField(body.synology_password);
+    const synology_skip_ssl = body.synology_skip_ssl === true || body.synology_skip_ssl === 'true';
 
     if (!synology_url || !synology_username) {
         handleServiceResult(res, fail('URL and username are required', 400));
     }
     else {
-        handleServiceResult(res, await updateSynologySettings(authReq.user.id, synology_url, synology_username, synology_password));
+        handleServiceResult(res, await updateSynologySettings(authReq.user.id, synology_url, synology_username, synology_password, synology_skip_ssl));
     }
 });
 
@@ -51,10 +53,13 @@ router.get('/status', authenticate, async (req: Request, res: Response) => {
 });
 
 router.post('/test', authenticate, async (req: Request, res: Response) => {
+    const authReq = req as AuthRequest;
     const body = req.body as Record<string, unknown>;
     const synology_url = _parseStringBodyField(body.synology_url);
     const synology_username = _parseStringBodyField(body.synology_username);
     const synology_password = _parseStringBodyField(body.synology_password);
+    const synology_otp = _parseStringBodyField(body.synology_otp);
+    const synology_skip_ssl = body.synology_skip_ssl === true || body.synology_skip_ssl === 'true';
 
     if (!synology_url || !synology_username || !synology_password) {
         const missingFields: string[] = [];
@@ -64,13 +69,18 @@ router.post('/test', authenticate, async (req: Request, res: Response) => {
         handleServiceResult(res, success({ connected: false, error: `${missingFields.join(', ')} ${missingFields.length > 1 ? 'are' : 'is'} required` }));
     }
     else{
-        handleServiceResult(res, await testSynologyConnection(synology_url, synology_username, synology_password));
+        handleServiceResult(res, await testSynologyConnection(authReq.user.id, synology_url, synology_username, synology_password, synology_otp, synology_skip_ssl));
     }
 });
 
 router.get('/albums', authenticate, async (req: Request, res: Response) => {
     const authReq = req as AuthRequest;
     handleServiceResult(res, await listSynologyAlbums(authReq.user.id));
+});
+
+router.get('/albums/:albumId/photos', authenticate, async (req: Request, res: Response) => {
+    const authReq = req as AuthRequest;
+    handleServiceResult(res, await getSynologyAlbumPhotos(authReq.user.id, req.params.albumId));
 });
 
 router.post('/trips/:tripId/album-links/:linkId/sync', authenticate, async (req: Request, res: Response) => {
@@ -86,8 +96,12 @@ router.post('/search', authenticate, async (req: Request, res: Response) => {
     const body = req.body as Record<string, unknown>;
     const from = _parseStringBodyField(body.from);
     const to = _parseStringBodyField(body.to);
-    const offset = _parseNumberBodyField(body.offset, 0);
-    const limit = _parseNumberBodyField(body.limit, 100);
+    let offset = _parseNumberBodyField(body.offset, 0);
+    const page = _parseNumberBodyField(body.page, 1) - 1;
+    let limit = _parseNumberBodyField(body.limit, 100);
+    const size = _parseNumberBodyField(body.size, 0);
+    if(page > 0) offset = page*limit;
+    if(size > 0) limit = size;
 
     handleServiceResult(res, await searchSynologyPhotos(
         authReq.user.id,

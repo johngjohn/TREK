@@ -558,10 +558,23 @@ export function addTripPhoto(
   provider: string,
   opts: { shared?: boolean; albumLinkId?: number } = {}
 ): TestTripPhoto {
+  // Insert into trek_photos first (central registry)
+  db.prepare(
+    'INSERT OR IGNORE INTO trek_photos (provider, asset_id, owner_id) VALUES (?, ?, ?)'
+  ).run(provider, assetId, userId);
+  const trekPhoto = db.prepare(
+    'SELECT id FROM trek_photos WHERE provider = ? AND asset_id = ? AND owner_id = ?'
+  ).get(provider, assetId, userId) as { id: number };
+
   const result = db.prepare(
-    'INSERT OR IGNORE INTO trip_photos (trip_id, user_id, asset_id, provider, shared, album_link_id) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(tripId, userId, assetId, provider, opts.shared ? 1 : 0, opts.albumLinkId ?? null);
-  return db.prepare('SELECT * FROM trip_photos WHERE id = ?').get(result.lastInsertRowid) as TestTripPhoto;
+    'INSERT OR IGNORE INTO trip_photos (trip_id, user_id, photo_id, shared, album_link_id) VALUES (?, ?, ?, ?, ?)'
+  ).run(tripId, userId, trekPhoto.id, opts.shared ? 1 : 0, opts.albumLinkId ?? null);
+  return db.prepare(`
+    SELECT tp.id, tp.trip_id, tp.user_id, tkp.asset_id, tkp.provider, tp.shared, tp.album_link_id
+    FROM trip_photos tp
+    JOIN trek_photos tkp ON tkp.id = tp.photo_id
+    WHERE tp.id = ?
+  `).get(result.lastInsertRowid) as TestTripPhoto;
 }
 
 export interface TestAlbumLink {
@@ -637,4 +650,94 @@ export function createTag(
   const color = overrides.color ?? '#10b981';
   const result = db.prepare('INSERT INTO tags (user_id, name, color) VALUES (?, ?, ?)').run(userId, name, color);
   return db.prepare('SELECT * FROM tags WHERE id = ?').get(result.lastInsertRowid) as { id: number; user_id: number; name: string; color: string };
+}
+
+// ---------------------------------------------------------------------------
+// Journeys
+// ---------------------------------------------------------------------------
+
+let _journeySeq = 0;
+
+export interface TestJourney {
+  id: number;
+  user_id: number;
+  title: string;
+  subtitle: string | null;
+  status: string;
+  cover_image: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export function createJourney(
+  db: Database.Database,
+  userId: number,
+  overrides: Partial<{ title: string; subtitle: string; status: string }> = {}
+): TestJourney {
+  _journeySeq++;
+  const title = overrides.title ?? `Test Journey ${_journeySeq}`;
+  const now = Date.now();
+  const result = db.prepare(
+    'INSERT INTO journeys (user_id, title, subtitle, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(userId, title, overrides.subtitle ?? null, overrides.status ?? 'active', now, now);
+
+  const journeyId = result.lastInsertRowid as number;
+
+  // Auto-add owner as contributor
+  db.prepare(
+    "INSERT INTO journey_contributors (journey_id, user_id, role, added_at) VALUES (?, ?, 'owner', ?)"
+  ).run(journeyId, userId, now);
+
+  return db.prepare('SELECT * FROM journeys WHERE id = ?').get(journeyId) as TestJourney;
+}
+
+export interface TestJourneyEntry {
+  id: number;
+  journey_id: number;
+  author_id: number;
+  type: string;
+  entry_date: string;
+  title: string | null;
+  story: string | null;
+}
+
+export function createJourneyEntry(
+  db: Database.Database,
+  journeyId: number,
+  authorId: number,
+  overrides: Partial<{ type: string; entry_date: string; title: string; story: string; location_name: string; mood: string; weather: string }> = {}
+): TestJourneyEntry {
+  const now = Date.now();
+  const result = db.prepare(`
+    INSERT INTO journey_entries (journey_id, author_id, type, entry_date, title, story, location_name, mood, weather, visibility, sort_order, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'private', 0, ?, ?)
+  `).run(
+    journeyId, authorId,
+    overrides.type ?? 'entry',
+    overrides.entry_date ?? '2026-01-15',
+    overrides.title ?? null,
+    overrides.story ?? null,
+    overrides.location_name ?? null,
+    overrides.mood ?? null,
+    overrides.weather ?? null,
+    now, now
+  );
+  return db.prepare('SELECT * FROM journey_entries WHERE id = ?').get(result.lastInsertRowid) as TestJourneyEntry;
+}
+
+export function addJourneyContributor(
+  db: Database.Database,
+  journeyId: number,
+  userId: number,
+  role: 'editor' | 'viewer' = 'editor'
+): void {
+  db.prepare(
+    'INSERT OR IGNORE INTO journey_contributors (journey_id, user_id, role, added_at) VALUES (?, ?, ?, ?)'
+  ).run(journeyId, userId, role, Date.now());
+}
+
+export function linkTripToJourney(db: Database.Database, journeyId: number, tripId: number): void {
+  db.prepare(
+    'INSERT OR IGNORE INTO journey_trips (journey_id, trip_id, linked_at) VALUES (?, ?, ?)'
+  ).run(journeyId, tripId, Date.now());
 }

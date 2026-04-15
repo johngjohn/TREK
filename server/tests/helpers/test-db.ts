@@ -67,6 +67,13 @@ const RESET_TABLES = [
   'share_tokens',
   'trip_members',
   'trips',
+  // Journey
+  'journey_share_tokens',
+  'journey_photos',
+  'journey_entries',
+  'journey_contributors',
+  'journey_trips',
+  'journeys',
   // Vacay
   'vacay_entries',
   'vacay_company_holidays',
@@ -113,6 +120,7 @@ const DEFAULT_ADDONS = [
   { id: 'vacay',     name: 'Vacay',           description: 'Vacation day planner',       type: 'global',      icon: 'CalendarDays',enabled: 1, sort_order: 10 },
   { id: 'atlas',     name: 'Atlas',           description: 'Visited countries map',      type: 'global',      icon: 'Globe',       enabled: 1, sort_order: 11 },
   { id: 'mcp',       name: 'MCP',             description: 'AI assistant integration',   type: 'integration', icon: 'Terminal',    enabled: 0, sort_order: 12 },
+  { id: 'naver_list_import', name: 'Naver List Import', description: 'Import places from shared Naver Maps lists', type: 'trip', icon: 'Link2', enabled: 0, sort_order: 13 },
   { id: 'collab',    name: 'Collab',          description: 'Notes, polls, live chat',    type: 'trip',        icon: 'Users',       enabled: 1, sort_order: 6  },
 ];
 
