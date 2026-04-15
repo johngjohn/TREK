@@ -50,7 +50,7 @@ export default function Modal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start sm:items-center justify-center px-4 modal-backdrop"
+      className="fixed inset-0 z-[200] flex items-start sm:items-center justify-center px-4 modal-backdrop"
       style={{ backgroundColor: 'rgba(15, 23, 42, 0.5)', paddingTop: 70, paddingBottom: 20, overflow: 'hidden' }}
       onMouseDown={e => { mouseDownTarget.current = e.target }}
       onClick={e => {

@@ -906,7 +906,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
         )}
 
         {activeTab === 'buchungen' && (
-          <div style={{ height: '100%', maxWidth: 1200, margin: '0 auto', width: '100%', display: 'flex', flexDirection: 'column', overflowY: 'auto', overscrollBehavior: 'contain' }}>
+          <div style={{ height: '100%', maxWidth: 1200, margin: '0 auto', width: '100%', display: 'flex', flexDirection: 'column', overflowY: 'auto', overscrollBehavior: 'contain', paddingBottom: 'var(--bottom-nav-h)' }}>
             <ReservationsPanel
               tripId={tripId}
               reservations={reservations}
@@ -922,13 +922,13 @@ export default function TripPlannerPage(): React.ReactElement | null {
         )}
 
         {activeTab === 'listen' && (
-          <div style={{ height: '100%', overflowY: 'auto', overscrollBehavior: 'contain', maxWidth: 1800, margin: '0 auto', width: '100%', padding: '8px 0' }}>
+          <div style={{ height: '100%', overflowY: 'auto', overscrollBehavior: 'contain', maxWidth: 1800, margin: '0 auto', width: '100%', padding: '8px 0', paddingBottom: 'calc(var(--bottom-nav-h) + 8px)' }}>
             <ListsContainer tripId={tripId} packingItems={packingItems} todoItems={todoItems} />
           </div>
         )}
 
         {activeTab === 'finanzplan' && (
-          <div style={{ height: '100%', overflowY: 'auto', overscrollBehavior: 'contain', maxWidth: 1800, margin: '0 auto', width: '100%', padding: '8px 0' }}>
+          <div style={{ height: '100%', overflowY: 'auto', overscrollBehavior: 'contain', maxWidth: 1800, margin: '0 auto', width: '100%', padding: '8px 0', paddingBottom: 'calc(var(--bottom-nav-h) + 8px)' }}>
             <BudgetPanel tripId={tripId} tripMembers={tripMembers} />
           </div>
         )}

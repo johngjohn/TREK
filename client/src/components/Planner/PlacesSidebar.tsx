@@ -380,7 +380,7 @@ const PlacesSidebar = React.memo(function PlacesSidebar({
         >
           <div
             onClick={e => e.stopPropagation()}
-            style={{ background: 'var(--bg-card)', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 500, maxHeight: '70vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', paddingBottom: 'env(safe-area-inset-bottom)' }}
+            style={{ background: 'var(--bg-card)', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 500, maxHeight: '70vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', paddingBottom: 'var(--bottom-nav-h)' }}
           >
             <div style={{ padding: '16px 20px 12px', borderBottom: '1px solid var(--border-secondary)' }}>
               <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{dayPickerPlace.name}</div>

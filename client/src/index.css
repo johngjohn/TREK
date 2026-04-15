@@ -141,6 +141,7 @@ html.dark .bg-slate-50\/60, html.dark [class*="bg-slate-50/"] { background-color
 :root {
   --safe-top: env(safe-area-inset-top, 0px);
   --nav-h: 0px;
+  --bottom-nav-h: 0px;
   --font-system: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
   --sp-1: 4px;
   --sp-2: 8px;
@@ -191,6 +192,10 @@ html.dark .bg-slate-50\/60, html.dark [class*="bg-slate-50/"] { background-color
   --mood-neutral: #94928C;
   --mood-tired: #6B9BD2;
   --mood-rough: #9B8EC4;
+}
+
+@media (max-width: 767px) {
+  :root { --bottom-nav-h: calc(84px + env(safe-area-inset-bottom, 0px)); }
 }
 
 @media (min-width: 768px) {
