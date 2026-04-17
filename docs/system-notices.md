@@ -69,7 +69,7 @@ There are **no database rows for notice definitions**. The registry is code-only
    ├── reads user_notice_dismissals
    ├── filters SYSTEM_NOTICES:
    │     – not dismissed
-   │     – within [minVersion, maxVersion] range for the running app version
+   │     – within [minVersion, maxVersion) range for the running app version
    │     – all conditions pass (AND logic)
    ├── sorts by priority → severity → publishedAt (desc)
    └── strips server-only fields (conditions, publishedAt, minVersion, maxVersion, priority)
