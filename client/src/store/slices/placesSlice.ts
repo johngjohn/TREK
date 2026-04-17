@@ -12,6 +12,7 @@ export interface PlacesSlice {
   addPlace: (tripId: number | string, placeData: Partial<Place>) => Promise<Place>
   updatePlace: (tripId: number | string, placeId: number, placeData: Partial<Place>) => Promise<Place>
   deletePlace: (tripId: number | string, placeId: number) => Promise<void>
+  deletePlacesMany: (tripId: number | string, placeIds: number[]) => Promise<void>
 }
 
 export const createPlacesSlice = (set: SetState, get: GetState): PlacesSlice => ({
@@ -78,6 +79,30 @@ export const createPlacesSlice = (set: SetState, get: GetState): PlacesSlice => 
       })
     } catch (err: unknown) {
       throw new Error(getApiErrorMessage(err, 'Error deleting place'))
+    }
+  },
+
+  deletePlacesMany: async (tripId, placeIds) => {
+    if (placeIds.length === 0) return
+    try {
+      await placeRepo.deleteMany(tripId, placeIds)
+      const idSet = new Set(placeIds)
+      set(state => {
+        const updatedAssignments = { ...state.assignments }
+        let changed = false
+        for (const [dayId, items] of Object.entries(state.assignments)) {
+          if (items.some((a: Assignment) => a.place?.id != null && idSet.has(a.place.id))) {
+            updatedAssignments[dayId] = items.filter((a: Assignment) => !idSet.has(a.place?.id!))
+            changed = true
+          }
+        }
+        return {
+          places: state.places.filter(p => !idSet.has(p.id)),
+          ...(changed ? { assignments: updatedAssignments } : {}),
+        }
+      })
+    } catch (err: unknown) {
+      throw new Error(getApiErrorMessage(err, 'Error deleting places'))
     }
   },
 })

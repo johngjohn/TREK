@@ -134,6 +134,8 @@ describe('fetchPhoto — in-flight deduplication', () => {
     svc.fetchPhoto('k', 'pid', undefined, undefined, undefined, cb1);
     svc.fetchPhoto('k', 'pid', undefined, undefined, undefined, cb2);
 
+    // acquireRequestSlot() is async (Promise.resolve), so flush microtasks before asserting
+    await flush();
     expect(mockPlacePhoto).toHaveBeenCalledTimes(1);
 
     resolve({ photoUrl: 'https://example.com/photo.jpg' });

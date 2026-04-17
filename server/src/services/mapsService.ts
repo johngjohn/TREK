@@ -71,6 +71,30 @@ const UA = 'TREK Travel Planner (https://github.com/mauriceboe/TREK)';
 // ── Photo cache (disk-backed) ────────────────────────────────────────────────
 import * as placePhotoCache from './placePhotoCache';
 
+// ── Concurrency limiter for outbound photo fetches ───────────────────────────
+// Caps simultaneous Wikimedia/Google photo requests so a bulk import of hundreds
+// of places cannot monopolise the event loop or trigger external API rate limits.
+const MAX_CONCURRENT_PHOTO_FETCHES = 5;
+let photoFetchActive = 0;
+const photoFetchQueue: Array<() => void> = [];
+
+function acquirePhotoFetchSlot(): Promise<void> {
+  if (photoFetchActive < MAX_CONCURRENT_PHOTO_FETCHES) {
+    photoFetchActive++;
+    return Promise.resolve();
+  }
+  return new Promise(resolve => photoFetchQueue.push(resolve));
+}
+
+function releasePhotoFetchSlot(): void {
+  const next = photoFetchQueue.shift();
+  if (next) {
+    next();
+  } else {
+    photoFetchActive--;
+  }
+}
+
 // ── API key retrieval ────────────────────────────────────────────────────────
 
 export function getMapsKey(userId: number): string | null {
@@ -597,6 +621,8 @@ export async function getPlacePhoto(
   }
 
   const fetchPromise = (async (): Promise<{ filePath: string; attribution: string | null } | null> => {
+    await acquirePhotoFetchSlot();
+    try {
     const apiKey = getMapsKey(userId);
     const isCoordLookup = placeId.startsWith('coords:');
 
@@ -676,6 +702,9 @@ export async function getPlacePhoto(
     }
 
     return { filePath: cached.filePath, attribution };
+    } finally {
+      releasePhotoFetchSlot();
+    }
   })();
 
   placePhotoCache.setInFlight(placeId, fetchPromise);

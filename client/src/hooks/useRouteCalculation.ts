@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useSettingsStore } from '../store/settingsStore'
+import { useTripStore } from '../store/tripStore'
 import { calculateSegments } from '../components/Map/RouteCalculator'
 import type { TripStoreState } from '../store/tripStore'
 import type { RouteSegment, RouteResult } from '../types'
@@ -15,14 +16,13 @@ export function useRouteCalculation(tripStore: TripStoreState, selectedDayId: nu
   const [routeSegments, setRouteSegments] = useState<RouteSegment[]>([])
   const routeCalcEnabled = useSettingsStore((s) => s.settings.route_calculation) !== false
   const routeAbortRef = useRef<AbortController | null>(null)
-  // Keep a ref to the latest tripStore so updateRouteForDay never has a stale closure
-  const tripStoreRef = useRef(tripStore)
-  tripStoreRef.current = tripStore
 
   const updateRouteForDay = useCallback(async (dayId: number | null) => {
     if (routeAbortRef.current) routeAbortRef.current.abort()
     if (!dayId) { setRoute(null); setRouteSegments([]); return }
-    const currentAssignments = tripStoreRef.current.assignments || {}
+    // Read directly from store (not a render-phase ref) so callers after optimistic
+    // updates or non-optimistic deletes always see the latest assignments.
+    const currentAssignments = useTripStore.getState().assignments || {}
     const da = (currentAssignments[String(dayId)] || []).slice().sort((a, b) => a.order_index - b.order_index)
     const waypoints = da.map((a) => a.place).filter((p) => p?.lat && p?.lng)
     if (waypoints.length < 2) { setRoute(null); setRouteSegments([]); return }

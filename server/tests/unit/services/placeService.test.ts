@@ -277,19 +277,24 @@ describe('importGpx', () => {
     expect(result.places[1].name).toBe('London');
   });
 
-  it('PLACE-SVC-022 — falls back to <rte> route points when no <wpt> elements exist', () => {
+  it('PLACE-SVC-022 — imports <rte> as a single polyline-place with routeGeometry', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
     const gpx = Buffer.from(`<?xml version="1.0"?><gpx version="1.1">
       <rte>
+        <name>My Route</name>
         <rtept lat="48.8566" lon="2.3522"><name>Start</name></rtept>
         <rtept lat="51.5074" lon="-0.1278"><name>End</name></rtept>
       </rte>
     </gpx>`);
     const result = importGpx(String(trip.id), gpx) as any;
-    expect(result.places).toHaveLength(2);
-    expect(result.places[0].name).toBe('Start');
-    expect(result.places[1].name).toBe('End');
+    expect(result.places).toHaveLength(1);
+    expect(result.places[0].name).toBe('My Route');
+    expect(result.places[0].lat).toBe(48.8566);
+    expect(result.places[0].lng).toBe(2.3522);
+    expect(result.places[0].route_geometry).toBeTruthy();
+    const coords = JSON.parse(result.places[0].route_geometry);
+    expect(coords).toHaveLength(2);
   });
 
   it('PLACE-SVC-023 — imports <trk> track as a single place with routeGeometry', () => {

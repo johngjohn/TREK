@@ -264,6 +264,54 @@ function getPlacesForTrips(tripIds: number[]): Place[] {
   return db.prepare(`SELECT * FROM places WHERE trip_id IN (${placeholders})`).all(...tripIds) as Place[];
 }
 
+// ── Country resolution (batch DB cache + sync fallback + background geocoding) ──
+
+function resolvePlaceCountries(places: Place[]): Map<number, string> {
+  const out = new Map<number, string>();
+  const geoPlaces = places.filter(p => p.lat && p.lng);
+  const placeIds = geoPlaces.map(p => p.id);
+
+  const cached = placeIds.length > 0
+    ? (db.prepare(
+        `SELECT place_id, country_code FROM place_regions WHERE place_id IN (${placeIds.map(() => '?').join(',')})`
+      ).all(...placeIds) as { place_id: number; country_code: string }[])
+    : [];
+  const cachedMap = new Map(cached.map(r => [r.place_id, r.country_code]));
+
+  const uncachedForGeocode: Place[] = [];
+  for (const p of places) {
+    const fromDb = cachedMap.get(p.id);
+    if (fromDb) { out.set(p.id, fromDb); continue; }
+    const sync = resolveCountryCodeSync(p);
+    if (sync) { out.set(p.id, sync); continue; }
+    if (p.lat && p.lng && !geocodingInFlight.has(p.id)) {
+      uncachedForGeocode.push(p);
+    }
+  }
+
+  if (uncachedForGeocode.length > 0) {
+    const insertStmt = db.prepare(
+      'INSERT OR REPLACE INTO place_regions (place_id, country_code, region_code, region_name) VALUES (?, ?, ?, ?)'
+    );
+    for (const p of uncachedForGeocode) geocodingInFlight.add(p.id);
+    void (async () => {
+      try {
+        for (const place of uncachedForGeocode) {
+          try {
+            const info = await reverseGeocodeRegion(place.lat!, place.lng!);
+            if (info) insertStmt.run(place.id, info.country_code, info.region_code, info.region_name);
+          } catch { /* continue */ }
+          finally { geocodingInFlight.delete(place.id); }
+        }
+      } catch {
+        for (const p of uncachedForGeocode) geocodingInFlight.delete(p.id);
+      }
+    })();
+  }
+
+  return out;
+}
+
 // ── getStats ────────────────────────────────────────────────────────────────
 
 export async function getStats(userId: number) {
@@ -279,9 +327,10 @@ export async function getStats(userId: number) {
   const places = getPlacesForTrips(tripIds);
 
   interface CountryEntry { code: string; places: { id: number; name: string; lat: number | null; lng: number | null }[]; tripIds: Set<number> }
+  const placeCountries = resolvePlaceCountries(places);
   const countrySet = new Map<string, CountryEntry>();
   for (const place of places) {
-    const code = await resolveCountryCode(place);
+    const code = placeCountries.get(place.id);
     if (code) {
       if (!countrySet.has(code)) {
         countrySet.set(code, { code, places: [], tripIds: new Set() });

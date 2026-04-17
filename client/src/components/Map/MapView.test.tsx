@@ -1,7 +1,8 @@
 import React from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen } from '../../../tests/helpers/render'
-import { fireEvent } from '@testing-library/react'
+import { fireEvent, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { resetAllStores } from '../../../tests/helpers/store'
 import { buildPlace } from '../../../tests/helpers/factories'
 import * as photoService from '../../services/photoService'
@@ -16,10 +17,13 @@ vi.mock('react-leaflet', () => ({
       data-lng={position[1]}
       onClick={() => eventHandlers?.click?.()}
     >
+      <button
+        data-testid="marker-hover-trigger"
+        onClick={() => eventHandlers?.mouseover?.({ originalEvent: { clientX: 100, clientY: 100 } })}
+      />
       {children}
     </div>
   ),
-  Tooltip: ({ children }: any) => <div data-testid="tooltip">{children}</div>,
   Polyline: ({ positions }: any) => <div data-testid="polyline" data-points={JSON.stringify(positions)} />,
   CircleMarker: () => <div data-testid="circle-marker" />,
   Circle: () => <div data-testid="circle" />,
@@ -100,17 +104,21 @@ describe('MapView', () => {
     expect(onMarkerClick).toHaveBeenCalledWith(42)
   })
 
-  it('FE-COMP-MAPVIEW-004: tooltip shows place name', () => {
+  it('FE-COMP-MAPVIEW-004: tooltip shows place name', async () => {
+    const user = userEvent.setup()
     const places = [buildMapPlace({ name: 'Eiffel Tower', lat: 48.8584, lng: 2.2945 })]
     render(<MapView places={places} />)
+    await user.click(screen.getByTestId('marker-hover-trigger'))
     expect(screen.getByTestId('tooltip').textContent).toContain('Eiffel Tower')
   })
 
-  it('FE-COMP-MAPVIEW-005: tooltip shows category name when present', () => {
+  it('FE-COMP-MAPVIEW-005: tooltip shows category name when present', async () => {
+    const user = userEvent.setup()
     const places = [
       buildMapPlace({ name: 'Louvre', lat: 48.86, lng: 2.337, category_name: 'Museum', category_icon: null }),
     ]
     render(<MapView places={places} />)
+    await user.click(screen.getByTestId('marker-hover-trigger'))
     expect(screen.getByTestId('tooltip').textContent).toContain('Museum')
   })
 
@@ -190,11 +198,13 @@ describe('MapView', () => {
     vi.mocked(photoService.getCached).mockReturnValue(null)
   })
 
-  it('FE-COMP-MAPVIEW-016: tooltip shows address when present', () => {
+  it('FE-COMP-MAPVIEW-016: tooltip shows address when present', async () => {
+    const user = userEvent.setup()
     const places = [
       buildMapPlace({ name: 'Eiffel Tower', lat: 48.8584, lng: 2.2945, address: '5 Av. Anatole France' }),
     ]
     render(<MapView places={places} />)
+    await user.click(screen.getByTestId('marker-hover-trigger'))
     expect(screen.getByTestId('tooltip').textContent).toContain('5 Av. Anatole France')
   })
 

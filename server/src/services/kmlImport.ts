@@ -6,6 +6,7 @@ export interface ParsedKmlPlacemark {
   lat: number | null;
   lng: number | null;
   folderName: string | null;
+  routeGeometry: string | null;
 }
 
 export interface KmlPlacemarkNode {
@@ -97,6 +98,26 @@ export function sanitizeKmlDescription(value: unknown): string | null {
   return decoded || null;
 }
 
+export function parseKmlLineStringCoordinates(value: unknown): Array<{ lat: number; lng: number; ele: number | null }> | null {
+  const coordinates = asTrimmedString(value);
+  if (!coordinates) return null;
+
+  const points = coordinates
+    .trim()
+    .split(/\s+/)
+    .map(coord => {
+      const parts = coord.split(',');
+      const lng = Number.parseFloat(parts[0] ?? '');
+      const lat = Number.parseFloat(parts[1] ?? '');
+      const eleRaw = parts[2] != null ? Number.parseFloat(parts[2]) : NaN;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      return { lat, lng, ele: Number.isFinite(eleRaw) ? eleRaw : null };
+    })
+    .filter((p): p is { lat: number; lng: number; ele: number | null } => p !== null);
+
+  return points.length >= 2 ? points : null;
+}
+
 export function parseKmlPointCoordinates(value: unknown): { lat: number; lng: number } | null {
   const coordinates = asTrimmedString(value);
   if (!coordinates) return null;
@@ -167,13 +188,25 @@ export function extractKmlPlacemarkNodes(kmlRoot: any): KmlPlacemarkNode[] {
 }
 
 export function parsePlacemarkNode(node: KmlPlacemarkNode): ParsedKmlPlacemark {
-  const coordinates = parseKmlPointCoordinates(node.placemark?.Point?.coordinates);
+  const pointCoords = parseKmlPointCoordinates(node.placemark?.Point?.coordinates);
+
+  let routeGeometry: string | null = null;
+  let pathFirstPt: { lat: number; lng: number } | null = null;
+  if (!pointCoords) {
+    const linePts = parseKmlLineStringCoordinates(node.placemark?.LineString?.coordinates);
+    if (linePts) {
+      pathFirstPt = { lat: linePts[0].lat, lng: linePts[0].lng };
+      const hasAllEle = linePts.every(p => p.ele !== null);
+      routeGeometry = JSON.stringify(linePts.map(p => hasAllEle ? [p.lat, p.lng, p.ele] : [p.lat, p.lng]));
+    }
+  }
 
   return {
     name: asTrimmedString(node.placemark?.name),
     description: sanitizeKmlDescription(node.placemark?.description),
-    lat: coordinates?.lat ?? null,
-    lng: coordinates?.lng ?? null,
+    lat: pointCoords?.lat ?? pathFirstPt?.lat ?? null,
+    lng: pointCoords?.lng ?? pathFirstPt?.lng ?? null,
     folderName: node.folderName,
+    routeGeometry,
   };
 }

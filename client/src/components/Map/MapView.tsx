@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback, createElement, memo } from 'react'
 import DOM from 'react-dom'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { MapContainer, TileLayer, Marker, Tooltip, Polyline, CircleMarker, Circle, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Polyline, CircleMarker, Circle, useMap } from 'react-leaflet'
 import MarkerClusterGroup from 'react-leaflet-cluster'
 import L from 'leaflet'
 import 'leaflet.markercluster/dist/MarkerCluster.css'
@@ -367,6 +367,35 @@ function LocationTracker() {
   )
 }
 
+interface MemoMarkerProps {
+  place: any
+  isSelected: boolean
+  orderNumbers: number[] | null
+  photoUrl: string | null
+  onClickPlace: (id: number) => void
+  onHover: (place: any, x: number, y: number) => void
+  onHoverOut: () => void
+}
+
+const MemoMarker = memo(function MemoMarker({
+  place, isSelected, orderNumbers, photoUrl, onClickPlace, onHover, onHoverOut,
+}: MemoMarkerProps) {
+  const icon = createPlaceIcon({ ...place, image_url: photoUrl }, orderNumbers, isSelected)
+  return (
+    <Marker
+      position={[place.lat, place.lng]}
+      icon={icon}
+      eventHandlers={{
+        click: () => onClickPlace(place.id),
+        mouseover: (e: any) => onHover(place, e.originalEvent.clientX, e.originalEvent.clientY),
+        mousemove: (e: any) => onHover(place, e.originalEvent.clientX, e.originalEvent.clientY),
+        mouseout: onHoverOut,
+      }}
+      zIndexOffset={isSelected ? 1000 : 0}
+    />
+  )
+})
+
 export const MapView = memo(function MapView({
   places = [],
   dayPlaces = [],
@@ -397,18 +426,48 @@ export const MapView = memo(function MapView({
     return { paddingTopLeft: [left, top], paddingBottomRight: [right, bottom] }
   }, [leftWidth, rightWidth, hasInspector, hasDayDetail])
 
+  // Hover state for the single tooltip overlay (replaces per-marker <Tooltip>)
+  const [hoveredPlace, setHoveredPlace] = useState<any>(null)
+  const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null)
+
+  const handleMarkerHover = useCallback((place: any, x: number, y: number) => {
+    setHoveredPlace(place)
+    setTooltipPos({ x, y })
+  }, [])
+
+  const handleMarkerHoverOut = useCallback(() => {
+    setHoveredPlace(null)
+  }, [])
+
+  const handleMarkerClick = useCallback((id: number) => {
+    onMarkerClick?.(id)
+  }, [onMarkerClick])
+
   // photoUrls: only base64 thumbs for smooth map zoom
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>(getAllThumbs)
   const placesPhotosEnabled = useAuthStore(s => s.placesPhotosEnabled)
+  // Batch photo state updates through a RAF so N simultaneous photo loads
+  // collapse into a single re-render instead of N separate renders.
+  const pendingThumbsRef = useRef<Record<string, string>>({})
+  const thumbRafRef = useRef<number | null>(null)
 
-  // Fetch photos via shared service — subscribe to thumb (base64) availability
   const placeIds = useMemo(() => places.map(p => p.id).join(','), [places])
   useEffect(() => {
     if (!places || places.length === 0 || !placesPhotosEnabled) return
     const cleanups: (() => void)[] = []
 
     const setThumb = (cacheKey: string, thumb: string) => {
-      setPhotoUrls(prev => prev[cacheKey] === thumb ? prev : { ...prev, [cacheKey]: thumb })
+      pendingThumbsRef.current[cacheKey] = thumb
+      if (thumbRafRef.current !== null) return
+      thumbRafRef.current = requestAnimationFrame(() => {
+        thumbRafRef.current = null
+        const pending = pendingThumbsRef.current
+        pendingThumbsRef.current = {}
+        setPhotoUrls(prev => {
+          const hasChange = Object.entries(pending).some(([k, v]) => prev[k] !== v)
+          return hasChange ? { ...prev, ...pending } : prev
+        })
+      })
     }
 
     for (const place of places) {
@@ -421,11 +480,9 @@ export const MapView = memo(function MapView({
         continue
       }
 
-      // Subscribe for when thumb becomes available
       cleanups.push(onThumbReady(cacheKey, thumb => setThumb(cacheKey, thumb)))
 
       if (!cached && !isLoading(cacheKey)) {
-        // Use the persisted proxy URL as photoId so photoService generates a base64 thumb from it
         const photoId = place.image_url || place.google_place_id || place.osm_id
         if (photoId || (place.lat && place.lng)) {
           fetchPhoto(cacheKey, photoId || `coords:${place.lat}:${place.lng}`, place.lat, place.lng, place.name)
@@ -433,7 +490,13 @@ export const MapView = memo(function MapView({
       }
     }
 
-    return () => cleanups.forEach(fn => fn())
+    return () => {
+      cleanups.forEach(fn => fn())
+      if (thumbRafRef.current !== null) {
+        cancelAnimationFrame(thumbRafRef.current)
+        thumbRafRef.current = null
+      }
+    }
   }, [placeIds, placesPhotosEnabled])
 
   const clusterIconCreateFunction = useCallback((cluster) => {
@@ -446,57 +509,49 @@ export const MapView = memo(function MapView({
     })
   }, [])
 
-  const isTouchDevice = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0)
+  const isTouchDevice = typeof window !== 'undefined' && navigator.maxTouchPoints > 0
 
   const markers = useMemo(() => places.map((place) => {
     const isSelected = place.id === selectedPlaceId
     const pck = place.google_place_id || place.osm_id || `${place.lat},${place.lng}`
-    const resolvedPhoto = (pck && photoUrls[pck]) || place.image_url || null
+    const photoUrl = (pck && photoUrls[pck]) || place.image_url || null
     const orderNumbers = dayOrderMap[place.id] ?? null
-    const icon = createPlaceIcon({ ...place, image_url: resolvedPhoto }, orderNumbers, isSelected)
-
     return (
-      <Marker
+      <MemoMarker
         key={place.id}
-        position={[place.lat, place.lng]}
-        icon={icon}
-        eventHandlers={{
-          click: () => onMarkerClick && onMarkerClick(place.id),
-        }}
-        zIndexOffset={isSelected ? 1000 : 0}
-      >
-        <Tooltip
-          direction="right"
-          offset={[0, 0]}
-          opacity={1}
-          className="map-tooltip"
-          permanent={isTouchDevice && isSelected}
-        >
-          <div style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" }}>
-            <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
-              {place.name}
-            </div>
-            {place.category_name && (() => {
-              const CatIcon = getCategoryIcon(place.category_icon)
-              return (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginTop: 1 }}>
-                  <CatIcon size={10} style={{ color: place.category_color || 'var(--text-muted)', flexShrink: 0 }} />
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{place.category_name}</span>
-                </div>
-              )
-            })()}
-            {place.address && (
-              <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2, maxWidth: 180, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {place.address}
-              </div>
-            )}
-          </div>
-        </Tooltip>
-      </Marker>
+        place={place}
+        isSelected={isSelected}
+        orderNumbers={orderNumbers}
+        photoUrl={photoUrl}
+        onClickPlace={handleMarkerClick}
+        onHover={handleMarkerHover}
+        onHoverOut={handleMarkerHoverOut}
+      />
     )
-  }), [places, selectedPlaceId, dayOrderMap, photoUrls, onMarkerClick, isTouchDevice])
+  }), [places, selectedPlaceId, dayOrderMap, photoUrls, handleMarkerClick, handleMarkerHover, handleMarkerHoverOut])
+
+  const gpxPolylines = useMemo(() => places.flatMap(place => {
+    if (!place.route_geometry) return []
+    try {
+      const coords = JSON.parse(place.route_geometry) as [number, number][]
+      if (!coords || coords.length < 2) return []
+      return [(
+        <Polyline
+          key={`gpx-${place.id}`}
+          positions={coords}
+          color={place.category_color || '#3b82f6'}
+          weight={3.5}
+          opacity={0.75}
+        />
+      )]
+    } catch { return [] }
+  }), [places])
+
+  const TooltipOverlay = hoveredPlace && tooltipPos && !isTouchDevice
+  const CatIcon = TooltipOverlay ? getCategoryIcon(hoveredPlace.category_icon) : null
 
   return (
+    <>
     <MapContainer
       id="trek-map"
       center={center}
@@ -553,22 +608,40 @@ export const MapView = memo(function MapView({
       )}
 
       {/* GPX imported route geometries */}
-      {places.map((place) => {
-        if (!place.route_geometry) return null
-        try {
-          const coords = JSON.parse(place.route_geometry) as [number, number][]
-          if (!coords || coords.length < 2) return null
-          return (
-            <Polyline
-              key={`gpx-${place.id}`}
-              positions={coords}
-              color={place.category_color || '#3b82f6'}
-              weight={3.5}
-              opacity={0.75}
-            />
-          )
-        } catch { return null }
-      })}
+      {gpxPolylines}
     </MapContainer>
+
+    {TooltipOverlay && (
+      <div data-testid="tooltip" style={{
+        position: 'fixed',
+        left: tooltipPos.x + 14,
+        top: tooltipPos.y - 10,
+        zIndex: 9999,
+        pointerEvents: 'none',
+        background: 'white',
+        borderRadius: 8,
+        boxShadow: '0 2px 10px rgba(0,0,0,0.15)',
+        padding: '6px 10px',
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif",
+        maxWidth: 220,
+        whiteSpace: 'nowrap',
+      }}>
+        <div style={{ fontWeight: 600, fontSize: 12, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {hoveredPlace.name}
+        </div>
+        {hoveredPlace.category_name && CatIcon && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginTop: 1 }}>
+            <CatIcon size={10} style={{ color: hoveredPlace.category_color || '#6b7280', flexShrink: 0 }} />
+            <span style={{ fontSize: 11, color: '#6b7280' }}>{hoveredPlace.category_name}</span>
+          </div>
+        )}
+        {hoveredPlace.address && (
+          <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {hoveredPlace.address}
+          </div>
+        )}
+      </div>
+    )}
+    </>
   )
 })

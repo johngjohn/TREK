@@ -169,6 +169,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
   const [fitKey, setFitKey] = useState<number>(0)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState<'left' | 'right' | null>(null)
   const [deletePlaceId, setDeletePlaceId] = useState<number | null>(null)
+  const [deletePlaceIds, setDeletePlaceIds] = useState<number[] | null>(null)
 
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768)
   useEffect(() => {
@@ -250,6 +251,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
 
     return places.filter(p => {
       if (!p.lat || !p.lng) return false
+      if (mapPlacesFilter === 'tracks' && !p.route_geometry) return false
       if (mapCategoryFilter.size > 0) {
         if (p.category_id == null) {
           if (!mapCategoryFilter.has('uncategorized')) return false
@@ -363,6 +365,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
     try {
       await tripActions.deletePlace(tripId, deletePlaceId)
       if (selectedPlaceId === deletePlaceId) setSelectedPlaceId(null)
+      updateRouteForDay(selectedDayId)
       toast.success(t('trip.toast.placeDeleted'))
       if (capturedPlace) {
         pushUndo(t('undo.deletePlace'), async () => {
@@ -382,7 +385,38 @@ export default function TripPlannerPage(): React.ReactElement | null {
         })
       }
     } catch (err: unknown) { toast.error(err instanceof Error ? err.message : t('common.unknownError')) }
-  }, [deletePlaceId, tripId, toast, selectedPlaceId, pushUndo])
+  }, [deletePlaceId, tripId, toast, selectedPlaceId, selectedDayId, updateRouteForDay, pushUndo])
+
+  const confirmDeletePlaces = useCallback(async (ids?: number[]) => {
+    const targetIds = ids ?? deletePlaceIds
+    if (!targetIds?.length) return
+    const state = useTripStore.getState()
+    const capturedPlaces = state.places.filter(p => targetIds.includes(p.id))
+    const capturedAssignments = Object.entries(state.assignments).flatMap(([dayId, as]) =>
+      as.filter(a => a.place?.id != null && targetIds.includes(a.place.id)).map(a => ({ dayId: Number(dayId), placeId: a.place!.id, orderIndex: a.order_index }))
+    )
+    try {
+      await tripActions.deletePlacesMany(tripId, targetIds)
+      if (selectedPlaceId != null && targetIds.includes(selectedPlaceId)) setSelectedPlaceId(null)
+      if (!ids) setDeletePlaceIds(null)
+      updateRouteForDay(selectedDayId)
+      toast.success(t('trip.toast.placesDeleted', { count: capturedPlaces.length }))
+      if (capturedPlaces.length > 0) {
+        pushUndo(t('undo.deletePlaces'), async () => {
+          for (const place of capturedPlaces) {
+            const newPlace = await tripActions.addPlace(tripId, {
+              name: place.name, description: place.description,
+              lat: place.lat, lng: place.lng, address: place.address,
+              category_id: place.category_id, icon: place.icon, price: place.price,
+            })
+            for (const a of capturedAssignments.filter(x => x.placeId === place.id)) {
+              await tripActions.assignPlaceToDay(tripId, a.dayId, newPlace.id, a.orderIndex)
+            }
+          }
+        })
+      }
+    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : t('common.unknownError')) }
+  }, [deletePlaceIds, tripId, toast, selectedPlaceId, selectedDayId, updateRouteForDay, pushUndo])
 
   const handleAssignToDay = useCallback(async (placeId, dayId, position) => {
     const target = dayId || selectedDayId
@@ -408,6 +442,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
     const capturedOrderIndex = capturedAssignment?.order_index ?? 0
     try {
       await tripActions.removeAssignment(tripId, dayId, assignmentId)
+      updateRouteForDay(dayId)
       if (capturedPlaceId != null) {
         const capturedDayId = dayId
         const capturedPos = capturedOrderIndex
@@ -745,6 +780,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
                     onAssignToDay={handleAssignToDay}
                     onEditPlace={(place) => { setEditingPlace(place); setEditingAssignmentId(null); setShowPlaceForm(true) }}
                     onDeletePlace={(placeId) => handleDeletePlace(placeId)}
+                    onBulkDeletePlaces={(ids) => setDeletePlaceIds(ids)}
                     onCategoryFilterChange={setMapCategoryFilter}
                     onPlacesFilterChange={setMapPlacesFilter}
                     pushUndo={pushUndo}
@@ -903,7 +939,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
                   <div style={{ flex: 1, overflow: 'auto' }}>
                     {mobileSidebarOpen === 'left'
                       ? <DayPlanSidebar tripId={tripId} trip={trip} days={days} places={places} categories={categories} assignments={assignments} selectedDayId={selectedDayId} selectedPlaceId={selectedPlaceId} selectedAssignmentId={selectedAssignmentId} onSelectDay={(id) => { handleSelectDay(id); setMobileSidebarOpen(null) }} onPlaceClick={(placeId, assignmentId) => { handlePlaceClick(placeId, assignmentId); setMobileSidebarOpen(null) }} onReorder={handleReorder} onUpdateDayTitle={handleUpdateDayTitle} onAssignToDay={handleAssignToDay} onRouteCalculated={(r) => { if (r) { setRoute(r.coordinates); setRouteInfo({ distance: r.distanceText, duration: r.durationText }) } }} reservations={reservations} onAddReservation={(dayId) => { setEditingReservation(null); tripActions.setSelectedDay(dayId); setShowReservationModal(true); setMobileSidebarOpen(null) }} onAddPlace={() => { setEditingPlace(null); setShowPlaceForm(true); setMobileSidebarOpen(null) }} onDayDetail={(day) => { setShowDayDetail(day); setSelectedPlaceId(null); selectAssignment(null); setMobileSidebarOpen(null) }} accommodations={tripAccommodations} onNavigateToFiles={() => { setMobileSidebarOpen(null); handleTabChange('dateien') }} onExpandedDaysChange={setExpandedDayIds} pushUndo={pushUndo} canUndo={canUndo} lastActionLabel={lastActionLabel} onUndo={handleUndo} />
-                      : <PlacesSidebar tripId={tripId} places={places} categories={categories} assignments={assignments} selectedDayId={selectedDayId} selectedPlaceId={selectedPlaceId} onPlaceClick={(placeId) => { handlePlaceClick(placeId); setMobileSidebarOpen(null) }} onAddPlace={() => { setEditingPlace(null); setShowPlaceForm(true); setMobileSidebarOpen(null) }} onAssignToDay={handleAssignToDay} onEditPlace={(place) => { setEditingPlace(place); setEditingAssignmentId(null); setShowPlaceForm(true); setMobileSidebarOpen(null) }} onDeletePlace={(placeId) => handleDeletePlace(placeId)} days={days} isMobile onCategoryFilterChange={setMapCategoryFilter} onPlacesFilterChange={setMapPlacesFilter} pushUndo={pushUndo} />
+                      : <PlacesSidebar tripId={tripId} places={places} categories={categories} assignments={assignments} selectedDayId={selectedDayId} selectedPlaceId={selectedPlaceId} onPlaceClick={(placeId) => { handlePlaceClick(placeId); setMobileSidebarOpen(null) }} onAddPlace={() => { setEditingPlace(null); setShowPlaceForm(true); setMobileSidebarOpen(null) }} onAssignToDay={handleAssignToDay} onEditPlace={(place) => { setEditingPlace(place); setEditingAssignmentId(null); setShowPlaceForm(true); setMobileSidebarOpen(null) }} onDeletePlace={(placeId) => handleDeletePlace(placeId)} onBulkDeletePlaces={(ids) => setDeletePlaceIds(ids)} onBulkDeleteConfirm={(ids) => confirmDeletePlaces(ids)} days={days} isMobile onCategoryFilterChange={setMapCategoryFilter} onPlacesFilterChange={setMapPlacesFilter} pushUndo={pushUndo} />
                     }
                   </div>
                 </div>
@@ -975,6 +1011,13 @@ export default function TripPlannerPage(): React.ReactElement | null {
         onConfirm={confirmDeletePlace}
         title={t('common.delete')}
         message={t('trip.confirm.deletePlace')}
+      />
+      <ConfirmDialog
+        isOpen={!!deletePlaceIds?.length}
+        onClose={() => setDeletePlaceIds(null)}
+        onConfirm={confirmDeletePlaces}
+        title={t('common.delete')}
+        message={t('trip.confirm.deletePlaces', { count: deletePlaceIds?.length ?? 0 })}
       />
     </div>
   )

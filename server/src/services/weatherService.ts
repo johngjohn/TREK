@@ -95,6 +95,7 @@ const WMO_DESCRIPTION_EN: Record<number, string> = {
 // ── Cache management ────────────────────────────────────────────────────
 
 const weatherCache = new Map<string, { data: WeatherResult; expiresAt: number }>();
+const inFlight = new Map<string, Promise<WeatherResult>>();
 const CACHE_MAX_ENTRIES = 1000;
 const CACHE_PRUNE_TARGET = 500;
 const CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -146,7 +147,7 @@ export function estimateCondition(tempAvg: number, precipMm: number): string {
 
 // ── getWeather ──────────────────────────────────────────────────────────
 
-export async function getWeather(
+async function _getWeatherImpl(
   lat: string,
   lng: string,
   date: string | undefined,
@@ -281,9 +282,27 @@ export async function getWeather(
   return result;
 }
 
+export async function getWeather(
+  lat: string,
+  lng: string,
+  date: string | undefined,
+  lang: string,
+): Promise<WeatherResult> {
+  const ck = cacheKey(lat, lng, date);
+  const cached = getCached(ck);
+  if (cached) return cached;
+
+  const inFlightKey = `${ck}:${lang}`;
+  const existing = inFlight.get(inFlightKey);
+  if (existing) return existing;
+  const promise = _getWeatherImpl(lat, lng, date, lang);
+  inFlight.set(inFlightKey, promise);
+  try { return await promise; } finally { inFlight.delete(inFlightKey); }
+}
+
 // ── getDetailedWeather ──────────────────────────────────────────────────
 
-export async function getDetailedWeather(
+async function _getDetailedWeatherImpl(
   lat: string,
   lng: string,
   date: string,
@@ -432,6 +451,24 @@ export async function getDetailedWeather(
 
   setCache(ck, result, TTL_FORECAST_MS);
   return result;
+}
+
+export async function getDetailedWeather(
+  lat: string,
+  lng: string,
+  date: string,
+  lang: string,
+): Promise<WeatherResult> {
+  const ck = `detailed_${cacheKey(lat, lng, date)}`;
+  const cached = getCached(ck);
+  if (cached) return cached;
+
+  const inFlightKey = `${ck}:${lang}`;
+  const existing = inFlight.get(inFlightKey);
+  if (existing) return existing;
+  const promise = _getDetailedWeatherImpl(lat, lng, date, lang);
+  inFlight.set(inFlightKey, promise);
+  try { return await promise; } finally { inFlight.delete(inFlightKey); }
 }
 
 // ── ApiError ────────────────────────────────────────────────────────────

@@ -240,6 +240,22 @@ export function deletePlace(tripId: string, placeId: string): boolean {
   return true;
 }
 
+export function deletePlacesMany(tripId: string, ids: number[]): number[] {
+  if (ids.length === 0) return [];
+  const selectStmt = db.prepare('SELECT id FROM places WHERE id = ? AND trip_id = ?');
+  const deleteStmt = db.prepare('DELETE FROM places WHERE id = ?');
+  const deleted: number[] = [];
+  const run = db.transaction((list: number[]) => {
+    for (const id of list) {
+      if (!selectStmt.get(id, tripId)) continue;
+      deleteStmt.run(id);
+      deleted.push(id);
+    }
+  });
+  run(ids);
+  return deleted;
+}
+
 // ---------------------------------------------------------------------------
 // Import GPX
 // ---------------------------------------------------------------------------
@@ -326,7 +342,20 @@ function trackInsertedInDedupSet(
   }
 }
 
-export function importGpx(tripId: string, fileBuffer: Buffer) {
+export interface GpxImportOptions {
+  importWaypoints?: boolean;
+  importRoutes?: boolean;
+  importTracks?: boolean;
+}
+
+export interface KmlImportOptions {
+  importPoints?: boolean;
+  importPaths?: boolean;
+}
+
+export function importGpx(tripId: string, fileBuffer: Buffer, opts: GpxImportOptions = {}) {
+  const { importWaypoints = true, importRoutes = true, importTracks = true } = opts;
+
   const parsed = gpxParser.parse(fileBuffer.toString('utf-8'));
   const gpx = parsed?.gpx;
   if (!gpx) return null;
@@ -338,41 +367,46 @@ export function importGpx(tripId: string, fileBuffer: Buffer) {
   const waypoints: WaypointEntry[] = [];
 
   // 1) Parse <wpt> elements (named waypoints / POIs)
-  for (const wpt of gpx.wpt ?? []) {
-    const lat = num(wpt['@_lat']);
-    const lng = num(wpt['@_lon']);
-    if (lat === null || lng === null) continue;
-    waypoints.push({ lat, lng, name: str(wpt.name) || `Waypoint ${waypoints.length + 1}`, description: str(wpt.desc) });
+  if (importWaypoints) {
+    for (const wpt of gpx.wpt ?? []) {
+      const lat = num(wpt['@_lat']);
+      const lng = num(wpt['@_lon']);
+      if (lat === null || lng === null) continue;
+      waypoints.push({ lat, lng, name: str(wpt.name) || `Waypoint ${waypoints.length + 1}`, description: str(wpt.desc) });
+    }
   }
 
-  // 2) If no <wpt>, try <rte> route points as individual places
-  if (waypoints.length === 0) {
+  // 2) Parse <rte> routes as polyline-places (one place per route with route_geometry)
+  if (importRoutes) {
     for (const rte of gpx.rte ?? []) {
-      for (const rtept of rte.rtept ?? []) {
-        const lat = num(rtept['@_lat']);
-        const lng = num(rtept['@_lon']);
-        if (lat === null || lng === null) continue;
-        waypoints.push({ lat, lng, name: str(rtept.name) || `Route Point ${waypoints.length + 1}`, description: str(rtept.desc) });
-      }
+      const pts = (rte.rtept ?? [])
+        .map((pt: Record<string, unknown>) => ({ lat: num(pt['@_lat']), lng: num(pt['@_lon']), ele: num(pt['ele']) }))
+        .filter((p: { lat: number | null; lng: number | null; ele: number | null }) => p.lat !== null && p.lng !== null) as Array<{ lat: number; lng: number; ele: number | null }>;
+      if (pts.length === 0) continue;
+      const hasAllEle = pts.every(p => p.ele !== null);
+      const routeGeometry = pts.map(p => hasAllEle ? [p.lat, p.lng, p.ele] : [p.lat, p.lng]);
+      waypoints.push({ lat: pts[0].lat, lng: pts[0].lng, name: str(rte.name) || 'GPX Route', description: str(rte.desc), routeGeometry: JSON.stringify(routeGeometry) });
     }
   }
 
-  // 3) Extract full track geometry from <trk> (always, even if <wpt> were found)
-  for (const trk of gpx.trk ?? []) {
-    const trackPoints: { lat: number; lng: number; ele: number | null }[] = [];
-    for (const seg of trk.trkseg ?? []) {
-      for (const pt of seg.trkpt ?? []) {
-        const lat = num(pt['@_lat']);
-        const lng = num(pt['@_lon']);
-        if (lat === null || lng === null) continue;
-        trackPoints.push({ lat, lng, ele: num(pt.ele) });
+  // 3) Extract full track geometry from <trk>
+  if (importTracks) {
+    for (const trk of gpx.trk ?? []) {
+      const trackPoints: { lat: number; lng: number; ele: number | null }[] = [];
+      for (const seg of trk.trkseg ?? []) {
+        for (const pt of seg.trkpt ?? []) {
+          const lat = num(pt['@_lat']);
+          const lng = num(pt['@_lon']);
+          if (lat === null || lng === null) continue;
+          trackPoints.push({ lat, lng, ele: num(pt.ele) });
+        }
       }
+      if (trackPoints.length === 0) continue;
+      const start = trackPoints[0];
+      const hasAllEle = trackPoints.every(p => p.ele !== null);
+      const routeGeometry = trackPoints.map(p => hasAllEle ? [p.lat, p.lng, p.ele] : [p.lat, p.lng]);
+      waypoints.push({ lat: start.lat, lng: start.lng, name: str(trk.name) || 'GPX Track', description: str(trk.desc), routeGeometry: JSON.stringify(routeGeometry) });
     }
-    if (trackPoints.length === 0) continue;
-    const start = trackPoints[0];
-    const hasAllEle = trackPoints.every(p => p.ele !== null);
-    const routeGeometry = trackPoints.map(p => hasAllEle ? [p.lat, p.lng, p.ele] : [p.lat, p.lng]);
-    waypoints.push({ lat: start.lat, lng: start.lng, name: str(trk.name) || 'GPX Track', description: str(trk.desc), routeGeometry: JSON.stringify(routeGeometry) });
   }
 
   if (waypoints.length === 0) return null;
@@ -401,7 +435,8 @@ export function importGpx(tripId: string, fileBuffer: Buffer) {
   return { places: created, count: created.length, skipped };
 }
 
-export function importKmlPlaces(tripId: string, fileBuffer: Buffer): PlaceImportResult {
+export function importKmlPlaces(tripId: string, fileBuffer: Buffer, opts: KmlImportOptions = {}): PlaceImportResult {
+  const { importPoints = true, importPaths = true } = opts;
   const decoded = decodeUtf8WithWarning(fileBuffer);
 
   const validationResult = XMLValidator.validate(decoded.text);
@@ -430,19 +465,32 @@ export function importKmlPlaces(tripId: string, fileBuffer: Buffer): PlaceImport
   let dupCount = 0;
 
   const insertStmt = db.prepare(`
-    INSERT INTO places (trip_id, name, description, lat, lng, category_id, transport_mode)
-    VALUES (?, ?, ?, ?, ?, ?, 'walking')
+    INSERT INTO places (trip_id, name, description, lat, lng, category_id, transport_mode, route_geometry)
+    VALUES (?, ?, ?, ?, ?, ?, 'walking', ?)
   `);
 
   const insertAll = db.transaction(() => {
     let fallbackIndex = 1;
     for (const node of placemarkNodes) {
       const parsedPlacemark = parsePlacemarkNode(node);
+      const isPath = parsedPlacemark.routeGeometry !== null;
 
-      // KML geometry support is intentionally limited to <Placemark><Point> coordinates.
+      // Unsupported geometry type (polygon, multi-geometry, no geometry, etc.)
       if (parsedPlacemark.lat === null || parsedPlacemark.lng === null) {
         summary.skippedCount += 1;
-        summary.errors.push(`Skipped Placemark ${fallbackIndex}: missing Point coordinates.`);
+        summary.errors.push(`Skipped Placemark ${fallbackIndex}: unsupported geometry type.`);
+        fallbackIndex += 1;
+        continue;
+      }
+
+      // Type filtering: respect importPoints / importPaths opts
+      if (isPath && !importPaths) {
+        summary.skippedCount += 1;
+        fallbackIndex += 1;
+        continue;
+      }
+      if (!isPath && !importPoints) {
+        summary.skippedCount += 1;
         fallbackIndex += 1;
         continue;
       }
@@ -466,6 +514,7 @@ export function importKmlPlaces(tripId: string, fileBuffer: Buffer): PlaceImport
         parsedPlacemark.lat,
         parsedPlacemark.lng,
         categoryId,
+        parsedPlacemark.routeGeometry,
       );
 
       const place = getPlaceWithTags(Number(result.lastInsertRowid));
@@ -514,15 +563,15 @@ export async function unpackKmzToKml(
   return preferredEntry.buffer();
 }
 
-export async function importKmzPlaces(tripId: string, kmzBuffer: Buffer): Promise<PlaceImportResult> {
+export async function importKmzPlaces(tripId: string, kmzBuffer: Buffer, opts: KmlImportOptions = {}): Promise<PlaceImportResult> {
   const kmlBuffer = await unpackKmzToKml(kmzBuffer);
-  return importKmlPlaces(tripId, kmlBuffer);
+  return importKmlPlaces(tripId, kmlBuffer, opts);
 }
 
-export async function importMapFile(tripId: string, fileBuffer: Buffer, filename: string): Promise<PlaceImportResult> {
+export async function importMapFile(tripId: string, fileBuffer: Buffer, filename: string, opts: KmlImportOptions = {}): Promise<PlaceImportResult> {
   const ext = filename.toLowerCase().split('.').pop();
-  if (ext === 'kmz') return importKmzPlaces(tripId, fileBuffer);
-  if (ext === 'kml') return importKmlPlaces(tripId, fileBuffer);
+  if (ext === 'kmz') return importKmzPlaces(tripId, fileBuffer, opts);
+  if (ext === 'kml') return importKmlPlaces(tripId, fileBuffer, opts);
   throw new Error(`Unsupported map file format: .${ext}. Please upload a .kml or .kmz file.`);
 }
 

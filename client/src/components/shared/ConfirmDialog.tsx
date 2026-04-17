@@ -40,7 +40,7 @@ export default function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center px-4"
+      className="fixed inset-0 z-[10000] flex items-center justify-center px-4"
       style={{ backgroundColor: 'rgba(15, 23, 42, 0.5)' }}
       onClick={onClose}
     >

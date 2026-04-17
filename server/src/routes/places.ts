@@ -12,11 +12,13 @@ import {
   getPlace,
   updatePlace,
   deletePlace,
+  deletePlacesMany,
   importGpx,
   importMapFile,
   importGoogleList,
   importNaverList,
   searchPlaceImage,
+  type KmlImportOptions,
 } from '../services/placeService';
 import { onPlaceCreated, onPlaceUpdated, onPlaceDeleted } from '../services/journeyService';
 
@@ -65,9 +67,18 @@ router.post('/import/gpx', authenticate, requireTripAccess, uploadMulter.single(
   const file = req.file as Express.Multer.File | undefined;
   if (!file) return res.status(400).json({ error: 'No file uploaded' });
 
-  const result = importGpx(tripId, file.buffer);
+  const parseBool = (v: unknown, defaultVal: boolean) => v === undefined || v === null ? defaultVal : String(v) === 'true';
+  const importWaypoints = parseBool(req.body.importWaypoints, true);
+  const importRoutes = parseBool(req.body.importRoutes, true);
+  const importTracks = parseBool(req.body.importTracks, true);
+
+  if (!importWaypoints && !importRoutes && !importTracks) {
+    return res.status(400).json({ error: 'No import types selected' });
+  }
+
+  const result = importGpx(tripId, file.buffer, { importWaypoints, importRoutes, importTracks });
   if (!result) {
-    return res.status(400).json({ error: 'No waypoints found in GPX file' });
+    return res.status(400).json({ error: 'No matching places found in GPX file' });
   }
 
   res.status(201).json({ places: result.places, count: result.count, skipped: result.skipped });
@@ -86,8 +97,18 @@ router.post('/import/map', authenticate, requireTripAccess, uploadMulter.single(
   const file = req.file as Express.Multer.File | undefined;
   if (!file) return res.status(400).json({ error: 'No file uploaded' });
 
+  const parseBool = (v: unknown, defaultVal: boolean) => v === undefined || v === null ? defaultVal : String(v) === 'true';
+  const importPoints = parseBool(req.body.importPoints, true);
+  const importPaths = parseBool(req.body.importPaths, true);
+
+  if (!importPoints && !importPaths) {
+    return res.status(400).json({ error: 'No import types selected' });
+  }
+
+  const kmlOpts: KmlImportOptions = { importPoints, importPaths };
+
   try {
-    const result = await importMapFile(tripId, file.buffer, file.originalname);
+    const result = await importMapFile(tripId, file.buffer, file.originalname, kmlOpts);
     if (result.summary?.totalPlacemarks === 0) {
       return res.status(400).json({ error: 'No valid Placemarks found in map file', summary: result.summary });
     }
@@ -199,6 +220,30 @@ router.put('/:id', authenticate, requireTripAccess, validateStringLengths({ name
   res.json({ place });
   broadcast(tripId, 'place:updated', { place }, req.headers['x-socket-id'] as string);
   try { onPlaceUpdated(place.id); } catch {}
+});
+
+// Bulk delete (must be before /:id)
+router.post('/bulk-delete', authenticate, requireTripAccess, (req: Request, res: Response) => {
+  const authReq = req as AuthRequest;
+  if (!checkPermission('place_edit', authReq.user.role, authReq.trip!.user_id, authReq.user.id, authReq.trip!.user_id !== authReq.user.id))
+    return res.status(403).json({ error: 'No permission' });
+
+  const { tripId } = req.params;
+  const { ids } = req.body as { ids?: unknown };
+  if (!Array.isArray(ids) || ids.some(v => typeof v !== 'number'))
+    return res.status(400).json({ error: 'ids must be an array of numbers' });
+
+  const idList = ids as number[];
+  if (idList.length === 0) return res.json({ deleted: [], count: 0 });
+
+  for (const id of idList) { try { onPlaceDeleted(id); } catch {} }
+  const deleted = deletePlacesMany(tripId, idList);
+
+  res.json({ deleted, count: deleted.length });
+  const socketId = req.headers['x-socket-id'] as string;
+  for (const id of deleted) {
+    broadcast(tripId, 'place:deleted', { placeId: id }, socketId);
+  }
 });
 
 router.delete('/:id', authenticate, requireTripAccess, (req: Request, res: Response) => {

@@ -10,11 +10,14 @@ const ERROR_TTL = 5 * 60 * 1000;
 // In-flight dedup — prevents stampedes when multiple requests hit the same uncached placeId simultaneously
 const inFlight = new Map<string, Promise<{ filePath: string; attribution: string | null } | null>>();
 
-function ensureDir(): void {
-  if (!fs.existsSync(GOOGLE_PHOTO_DIR)) {
-    fs.mkdirSync(GOOGLE_PHOTO_DIR, { recursive: true });
-  }
-}
+// In-memory set of placeIds whose file is confirmed on disk this session.
+// Avoids a synchronous fs.existsSync() call on every cache hit after the first verification.
+const knownOnDisk = new Set<string>();
+
+// Ensure upload dir exists once at startup — avoids sync FS calls inside put() on every write.
+try {
+  fs.mkdirSync(GOOGLE_PHOTO_DIR, { recursive: true });
+} catch { /* already exists */ }
 
 function filePath(placeId: string): string {
   // Hash to avoid filename collisions — coords:lat:lng pseudo-IDs contain characters that
@@ -41,10 +44,15 @@ export function get(placeId: string): CachedPhoto | null {
   if (!row) return null;
 
   const fp = filePath(placeId);
-  if (!fs.existsSync(fp)) {
-    // File missing (e.g. volume wiped) — clear row so it refetches
-    db.prepare('DELETE FROM google_place_photo_meta WHERE place_id = ?').run(placeId);
-    return null;
+
+  if (!knownOnDisk.has(placeId)) {
+    // First time this placeId is checked this session — verify the file exists on disk.
+    // (Guards against volume wipes or manual deletion between server restarts.)
+    if (!fs.existsSync(fp)) {
+      db.prepare('DELETE FROM google_place_photo_meta WHERE place_id = ?').run(placeId);
+      return null;
+    }
+    knownOnDisk.add(placeId);
   }
 
   return { photoUrl: proxyUrl(placeId), filePath: fp, attribution: row.attribution };
@@ -60,18 +68,20 @@ export function getErrored(placeId: string): boolean {
 }
 
 export function markError(placeId: string): void {
+  knownOnDisk.delete(placeId);
   db.prepare(
     'INSERT OR REPLACE INTO google_place_photo_meta (place_id, attribution, fetched_at, error_at) VALUES (?, NULL, ?, ?)'
   ).run(placeId, Date.now(), Date.now());
 }
 
 export async function put(placeId: string, bytes: Buffer, attribution: string | null): Promise<CachedPhoto> {
-  ensureDir();
   const fp = filePath(placeId);
   const tmp = fp + '.tmp';
 
   await fsPromises.writeFile(tmp, bytes);
   await fsPromises.rename(tmp, fp);
+
+  knownOnDisk.add(placeId);
 
   db.prepare(
     'INSERT OR REPLACE INTO google_place_photo_meta (place_id, attribution, fetched_at, error_at) VALUES (?, ?, ?, NULL)'
@@ -90,6 +100,9 @@ export function setInFlight(placeId: string, promise: Promise<{ filePath: string
 }
 
 export function serveFilePath(placeId: string): string | null {
+  if (knownOnDisk.has(placeId)) return filePath(placeId);
   const fp = filePath(placeId);
-  return fs.existsSync(fp) ? fp : null;
+  if (!fs.existsSync(fp)) return null;
+  knownOnDisk.add(placeId);
+  return fp;
 }

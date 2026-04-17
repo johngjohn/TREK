@@ -84,4 +84,26 @@ export const placeRepo = {
     offlineDb.places.delete(Number(id))
     return result
   },
+
+  async deleteMany(tripId: number | string, ids: number[]): Promise<unknown> {
+    if (!navigator.onLine) {
+      await offlineDb.places.bulkDelete(ids)
+      for (const id of ids) {
+        const mutId = generateUUID()
+        await mutationQueue.enqueue({
+          id: mutId,
+          tripId: Number(tripId),
+          method: 'DELETE',
+          url: `/trips/${tripId}/places/${id}`,
+          body: undefined,
+          resource: 'places',
+          entityId: id,
+        })
+      }
+      return { deleted: ids, count: ids.length }
+    }
+    const result = await placesApi.bulkDelete(tripId, ids)
+    await offlineDb.places.bulkDelete(ids)
+    return result
+  },
 }

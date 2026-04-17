@@ -190,18 +190,27 @@ export const placesApi = {
   update: (tripId: number | string, id: number | string, data: Record<string, unknown>) => apiClient.put(`/trips/${tripId}/places/${id}`, data).then(r => r.data),
   delete: (tripId: number | string, id: number | string) => apiClient.delete(`/trips/${tripId}/places/${id}`).then(r => r.data),
   searchImage: (tripId: number | string, id: number | string) => apiClient.get(`/trips/${tripId}/places/${id}/image`).then(r => r.data),
-  importGpx: (tripId: number | string, file: File) => {
-    const fd = new FormData(); fd.append('file', file)
+  importGpx: (tripId: number | string, file: File, opts?: { waypoints?: boolean; routes?: boolean; tracks?: boolean }) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    if (opts?.waypoints !== undefined) fd.append('importWaypoints', String(opts.waypoints))
+    if (opts?.routes !== undefined) fd.append('importRoutes', String(opts.routes))
+    if (opts?.tracks !== undefined) fd.append('importTracks', String(opts.tracks))
     return apiClient.post(`/trips/${tripId}/places/import/gpx`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data)
   },
-  importMapFile: (tripId: number | string, file: File) => {
-    const fd = new FormData(); fd.append('file', file)
+  importMapFile: (tripId: number | string, file: File, opts?: { points?: boolean; paths?: boolean }) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    if (opts?.points !== undefined) fd.append('importPoints', String(opts.points))
+    if (opts?.paths !== undefined) fd.append('importPaths', String(opts.paths))
     return apiClient.post(`/trips/${tripId}/places/import/map`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data)
   },
   importGoogleList: (tripId: number | string, url: string) =>
     apiClient.post(`/trips/${tripId}/places/import/google-list`, { url }).then(r => r.data),
   importNaverList: (tripId: number | string, url: string) =>
     apiClient.post(`/trips/${tripId}/places/import/naver-list`, { url }).then(r => r.data),
+  bulkDelete: (tripId: number | string, ids: number[]) =>
+    apiClient.post(`/trips/${tripId}/places/bulk-delete`, { ids }).then(r => r.data),
 }
 
 export const assignmentsApi = {

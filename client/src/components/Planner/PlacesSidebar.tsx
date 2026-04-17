@@ -1,7 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom'
-import { useState, useMemo, useEffect, useRef } from 'react'
-import { Search, Plus, X, CalendarDays, Pencil, Trash2, ExternalLink, Navigation, Upload, ChevronDown, Check, MapPin, Eye } from 'lucide-react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
+import { Search, Plus, X, CalendarDays, Pencil, Trash2, ExternalLink, Navigation, Upload, ChevronDown, Check, MapPin, Eye, Route } from 'lucide-react'
 import PlaceAvatar from '../shared/PlaceAvatar'
 import { getCategoryIcon } from '../shared/categoryIcons'
 import { useTranslation } from '../../i18n'
@@ -12,6 +12,7 @@ import { useTripStore } from '../../store/tripStore'
 import { useCanDo } from '../../store/permissionsStore'
 import type { Place, Category, Day, AssignmentsMap } from '../../types'
 import FileImportModal from './FileImportModal'
+import ConfirmDialog from '../shared/ConfirmDialog'
 
 interface PlacesSidebarProps {
   tripId: number
@@ -25,6 +26,8 @@ interface PlacesSidebarProps {
   onAssignToDay: (placeId: number, dayId: number) => void
   onEditPlace: (place: Place) => void
   onDeletePlace: (placeId: number) => void
+  onBulkDeletePlaces?: (ids: number[]) => void
+  onBulkDeleteConfirm?: (ids: number[]) => void
   days: Day[]
   isMobile: boolean
   onCategoryFilterChange?: (categoryIds: Set<string>) => void
@@ -32,9 +35,115 @@ interface PlacesSidebarProps {
   pushUndo?: (label: string, undoFn: () => Promise<void> | void) => void
 }
 
+interface MemoPlaceRowProps {
+  place: Place
+  category: Category | undefined
+  isSelected: boolean
+  isPlanned: boolean
+  inDay: boolean
+  isChecked: boolean
+  selectMode: boolean
+  selectedDayId: number | null
+  canEditPlaces: boolean
+  isMobile: boolean
+  t: (key: string, params?: Record<string, any>) => string
+  onPlaceClick: (id: number | null) => void
+  onContextMenu: (e: React.MouseEvent, place: Place) => void
+  onAssignToDay: (placeId: number, dayId?: number) => void
+  toggleSelected: (id: number) => void
+  setDayPickerPlace: (place: any) => void
+}
+
+const MemoPlaceRow = React.memo(function MemoPlaceRow({
+  place, category: cat, isSelected, isPlanned, inDay, isChecked,
+  selectMode, selectedDayId, canEditPlaces, isMobile, t,
+  onPlaceClick, onContextMenu, onAssignToDay, toggleSelected, setDayPickerPlace,
+}: MemoPlaceRowProps) {
+  const hasGeometry = Boolean(place.route_geometry)
+  return (
+    <div
+      key={place.id}
+      draggable={!selectMode}
+      onDragStart={e => {
+        e.dataTransfer.setData('placeId', String(place.id))
+        e.dataTransfer.effectAllowed = 'copy'
+        window.__dragData = { placeId: String(place.id) }
+      }}
+      onClick={() => {
+        if (selectMode) {
+          toggleSelected(place.id)
+        } else if (isMobile) {
+          setDayPickerPlace(place)
+        } else {
+          onPlaceClick(isSelected ? null : place.id)
+        }
+      }}
+      onContextMenu={selectMode ? undefined : e => onContextMenu(e, place)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '9px 14px 9px 16px',
+        cursor: selectMode ? 'pointer' : 'grab',
+        background: isChecked ? 'color-mix(in srgb, var(--accent) 8%, transparent)' : isSelected ? 'var(--border-faint)' : 'transparent',
+        borderBottom: '1px solid var(--border-faint)',
+        transition: 'background 0.1s',
+        contentVisibility: 'auto',
+        containIntrinsicSize: '0 52px',
+      }}
+      onMouseEnter={e => { if (!isSelected && !isChecked) e.currentTarget.style.background = 'var(--bg-hover)' }}
+      onMouseLeave={e => { if (!isSelected && !isChecked) e.currentTarget.style.background = 'transparent' }}
+    >
+      {selectMode && (
+        <div style={{
+          width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+          border: isChecked ? 'none' : '1.5px solid var(--border-primary)',
+          background: isChecked ? 'var(--accent)' : 'transparent',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          {isChecked && <Check size={10} strokeWidth={3} color="white" />}
+        </div>
+      )}
+      <PlaceAvatar place={place} category={cat} size={34} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, overflow: 'hidden' }}>
+          {hasGeometry && <Route size={11} strokeWidth={2} color="var(--text-faint)" style={{ flexShrink: 0 }} title="Track / Route" />}
+          {cat && (() => {
+            const CatIcon = getCategoryIcon(cat.icon)
+            return <CatIcon size={11} strokeWidth={2} color={cat.color || '#6366f1'} style={{ flexShrink: 0 }} title={cat.name} />
+          })()}
+          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.2 }}>
+            {place.name}
+          </span>
+        </div>
+        {(place.description || place.address || cat?.name) && (
+          <div style={{ marginTop: 2 }}>
+            <span style={{ fontSize: 11, color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', lineHeight: 1.2 }}>
+              {place.description || place.address || cat?.name}
+            </span>
+          </div>
+        )}
+      </div>
+      <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+        {!selectMode && !inDay && selectedDayId && (
+          <button
+            onClick={e => { e.stopPropagation(); onAssignToDay(place.id) }}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 20, height: 20, borderRadius: 6,
+              background: 'var(--bg-hover)', border: 'none', cursor: 'pointer',
+              color: 'var(--text-faint)', padding: 0, transition: 'background 0.15s, color 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent-text)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = 'var(--text-faint)' }}
+          ><Plus size={12} strokeWidth={2.5} /></button>
+        )}
+      </div>
+    </div>
+  )
+})
+
 const PlacesSidebar = React.memo(function PlacesSidebar({
   tripId, places, categories, assignments, selectedDayId, selectedPlaceId,
-  onPlaceClick, onAddPlace, onAssignToDay, onEditPlace, onDeletePlace, days, isMobile, onCategoryFilterChange, onPlacesFilterChange, pushUndo,
+  onPlaceClick, onAddPlace, onAssignToDay, onEditPlace, onDeletePlace, onBulkDeletePlaces, onBulkDeleteConfirm, days, isMobile, onCategoryFilterChange, onPlacesFilterChange, pushUndo,
 }: PlacesSidebarProps) {
   const { t } = useTranslation()
   const toast = useToast()
@@ -110,9 +219,7 @@ const PlacesSidebar = React.memo(function PlacesSidebar({
       if (result.places?.length > 0) {
         const importedIds: number[] = result.places.map((p: { id: number }) => p.id)
         pushUndo?.(t(provider === 'google' ? 'undo.importGoogleList' : 'undo.importNaverList'), async () => {
-          for (const id of importedIds) {
-            try { await placesApi.delete(tripId, id) } catch {}
-          }
+          try { await placesApi.bulkDelete(tripId, importedIds) } catch {}
           await loadTrip(tripId)
         })
       }
@@ -126,6 +233,28 @@ const PlacesSidebar = React.memo(function PlacesSidebar({
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [categoryFilters, setCategoryFiltersLocal] = useState<Set<string>>(new Set())
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<number[] | null>(null)
+
+  const exitSelectMode = () => { setSelectMode(false); setSelectedIds(new Set()) }
+
+  // Auto-exit when all selected places have been removed from the store (e.g. after bulk delete)
+  useEffect(() => {
+    if (!selectMode || selectedIds.size === 0) return
+    const placeIdSet = new Set(places.map(p => p.id))
+    if ([...selectedIds].every(id => !placeIdSet.has(id))) {
+      setSelectMode(false)
+      setSelectedIds(new Set())
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [places])
+
+  const toggleSelected = useCallback((id: number) => setSelectedIds(prev => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  }), [])
 
   const toggleCategoryFilter = (catId: string) => {
     setCategoryFiltersLocal(prev => {
@@ -140,12 +269,16 @@ const PlacesSidebar = React.memo(function PlacesSidebar({
   const [mobileShowDays, setMobileShowDays] = useState(false)
 
   // Alle geplanten Ort-IDs abrufen (einem Tag zugewiesen)
+  const hasTracks = useMemo(() => places.some(p => p.route_geometry), [places])
+  useEffect(() => { if (filter === 'tracks' && !hasTracks) setFilter('all') }, [hasTracks, filter])
+
   const plannedIds = useMemo(() => new Set(
     Object.values(assignments).flatMap(da => da.map(a => a.place?.id).filter(Boolean))
   ), [assignments])
 
   const filtered = useMemo(() => places.filter(p => {
     if (filter === 'unplanned' && plannedIds.has(p.id)) return false
+    if (filter === 'tracks' && !p.route_geometry) return false
     if (categoryFilters.size > 0) {
       if (p.category_id == null) {
         if (!categoryFilters.has('uncategorized')) return false
@@ -158,6 +291,26 @@ const PlacesSidebar = React.memo(function PlacesSidebar({
 
   const isAssignedToSelectedDay = (placeId) =>
     selectedDayId && (assignments[String(selectedDayId)] || []).some(a => a.place?.id === placeId)
+
+  const selectedDayIdRef = useRef<number | null>(selectedDayId)
+  useEffect(() => { selectedDayIdRef.current = selectedDayId }, [selectedDayId])
+
+  const inDaySet = useMemo(() => {
+    if (!selectedDayId) return new Set<number>()
+    return new Set<number>((assignments[String(selectedDayId)] || []).map((a: any) => a.place?.id).filter(Boolean))
+  }, [assignments, selectedDayId])
+
+  const openContextMenu = useCallback((e: React.MouseEvent, place: Place) => {
+    const selDayId = selectedDayIdRef.current
+    ctxMenu.open(e, [
+      canEditPlaces && { label: t('common.edit'), icon: Pencil, onClick: () => onEditPlace(place) },
+      selDayId && { label: t('planner.addToDay'), icon: CalendarDays, onClick: () => onAssignToDay(place.id, selDayId) },
+      place.website && { label: t('inspector.website'), icon: ExternalLink, onClick: () => window.open(place.website, '_blank') },
+      (place.lat && place.lng) && { label: 'Google Maps', icon: Navigation, onClick: () => window.open(`https://www.google.com/maps/search/?api=1&query=${(place as any).google_place_id ? encodeURIComponent(place.name) + '&query_place_id=' + (place as any).google_place_id : place.lat + ',' + place.lng}`, '_blank') },
+      { divider: true },
+      canEditPlaces && { label: t('common.delete'), icon: Trash2, danger: true, onClick: () => onDeletePlace(place.id) },
+    ])
+  }, [ctxMenu.open, canEditPlaces, t, onEditPlace, onAssignToDay, onDeletePlace])
 
   return (
     <div
@@ -219,13 +372,67 @@ const PlacesSidebar = React.memo(function PlacesSidebar({
           >
             <MapPin size={11} strokeWidth={2} /> {t(hasMultipleListImportProviders ? 'places.importList' : 'places.importGoogleList')}
           </button>
+          <button
+            onClick={() => { setSelectMode(v => !v); setSelectedIds(new Set()) }}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+              padding: '5px 10px', borderRadius: 8,
+              border: `1px solid ${selectMode ? 'var(--accent)' : 'var(--border-primary)'}`,
+              background: selectMode ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'none',
+              color: selectMode ? 'var(--accent)' : 'var(--text-faint)', fontSize: 11, fontWeight: 500,
+              cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
+            }}
+          >
+            <Check size={11} strokeWidth={2} /> {t('common.select')}
+          </button>
         </div>
+        {selectMode && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, padding: '6px 8px', borderRadius: 8, background: 'var(--bg-tertiary)', fontSize: 11 }}>
+            <span style={{ flex: 1, color: 'var(--text-muted)', fontWeight: 500 }}>
+              {t('places.selectionCount', { count: selectedIds.size })}
+            </span>
+            <button
+              onClick={() => {
+                if (selectedIds.size === filtered.length) {
+                  setSelectedIds(new Set())
+                } else {
+                  setSelectedIds(new Set(filtered.map(p => p.id)))
+                }
+              }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 11, fontFamily: 'inherit', padding: '2px 4px', borderRadius: 4 }}
+            >
+              {selectedIds.size === filtered.length && filtered.length > 0 ? t('common.deselectAll') : t('common.selectAll')}
+            </button>
+            <button
+              onClick={() => {
+                if (selectedIds.size === 0) return
+                if (isMobile) {
+                  setPendingDeleteIds(Array.from(selectedIds))
+                } else {
+                  onBulkDeletePlaces?.(Array.from(selectedIds))
+                }
+              }}
+              disabled={selectedIds.size === 0}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 'none',
+                cursor: selectedIds.size > 0 ? 'pointer' : 'default',
+                color: selectedIds.size > 0 ? '#ef4444' : 'var(--text-faint)',
+                fontSize: 11, fontFamily: 'inherit', padding: '2px 4px', borderRadius: 4, fontWeight: 500,
+              }}
+            >
+              <Trash2 size={11} strokeWidth={2} /> {t('places.deleteSelected')}
+            </button>
+            <button onClick={exitSelectMode} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', padding: 2 }}>
+              <X size={12} strokeWidth={2} color="var(--text-faint)" />
+            </button>
+          </div>
+        )}
         </>}
 
         {/* Filter-Tabs */}
         <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
-          {[{ id: 'all', label: t('places.all') }, { id: 'unplanned', label: t('places.unplanned') }].map(f => (
-            <button key={f.id} onClick={() => { setFilter(f.id); onPlacesFilterChange?.(f.id) }} style={{
+          {([{ id: 'all', label: t('places.all') }, { id: 'unplanned', label: t('places.unplanned') }, hasTracks ? { id: 'tracks', label: t('places.filterTracks') } : null] as const).filter(Boolean).map(f => (
+            <button key={f.id} onClick={() => { setFilter(f.id); onPlacesFilterChange?.(f.id); setSelectedIds(new Set()) }} style={{
               padding: '4px 10px', borderRadius: 20, border: 'none', cursor: 'pointer',
               fontSize: 11, fontWeight: 500, fontFamily: 'inherit',
               background: filter === f.id ? 'var(--accent)' : 'var(--bg-tertiary)',
@@ -240,7 +447,7 @@ const PlacesSidebar = React.memo(function PlacesSidebar({
           <input
             type="text"
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={e => { setSearch(e.target.value); if (selectMode) setSelectedIds(new Set()) }}
             placeholder={t('places.search')}
             style={{
               width: '100%', padding: '7px 30px 7px 30px', borderRadius: 10,
@@ -363,82 +570,29 @@ const PlacesSidebar = React.memo(function PlacesSidebar({
           filtered.map(place => {
             const cat = categories.find(c => c.id === place.category_id)
             const isSelected = place.id === selectedPlaceId
-            const inDay = isAssignedToSelectedDay(place.id)
             const isPlanned = plannedIds.has(place.id)
-
+            const inDay = inDaySet.has(place.id)
+            const isChecked = selectedIds.has(place.id)
             return (
-              <div
+              <MemoPlaceRow
                 key={place.id}
-                draggable
-                onDragStart={e => {
-                  e.dataTransfer.setData('placeId', String(place.id))
-                  e.dataTransfer.effectAllowed = 'copy'
-                  // Backup in window für Cross-Component Drag (dataTransfer geht bei Re-Render verloren)
-                  window.__dragData = { placeId: String(place.id) }
-                }}
-                onClick={() => {
-                  if (isMobile) {
-                    setDayPickerPlace(place)
-                  } else {
-                    onPlaceClick(isSelected ? null : place.id)
-                  }
-                }}
-                onContextMenu={e => ctxMenu.open(e, [
-                  canEditPlaces && { label: t('common.edit'), icon: Pencil, onClick: () => onEditPlace(place) },
-                  selectedDayId && { label: t('planner.addToDay'), icon: CalendarDays, onClick: () => onAssignToDay(place.id, selectedDayId) },
-                  place.website && { label: t('inspector.website'), icon: ExternalLink, onClick: () => window.open(place.website, '_blank') },
-                  (place.lat && place.lng) && { label: 'Google Maps', icon: Navigation, onClick: () => window.open(`https://www.google.com/maps/search/?api=1&query=${place.google_place_id ? encodeURIComponent(place.name) + '&query_place_id=' + place.google_place_id : place.lat + ',' + place.lng}`, '_blank') },
-                  { divider: true },
-                  canEditPlaces && { label: t('common.delete'), icon: Trash2, danger: true, onClick: () => onDeletePlace(place.id) },
-                ])}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '9px 14px 9px 16px',
-                  cursor: 'grab',
-                  background: isSelected ? 'var(--border-faint)' : 'transparent',
-                  borderBottom: '1px solid var(--border-faint)',
-                  transition: 'background 0.1s',
-                  contentVisibility: 'auto',
-                  containIntrinsicSize: '0 52px',
-                }}
-                onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--bg-hover)' }}
-                onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent' }}
-              >
-                <PlaceAvatar place={place} category={cat} size={34} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, overflow: 'hidden' }}>
-                    {cat && (() => {
-                      const CatIcon = getCategoryIcon(cat.icon)
-                      return <CatIcon size={11} strokeWidth={2} color={cat.color || '#6366f1'} style={{ flexShrink: 0 }} title={cat.name} />
-                    })()}
-                    <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.2 }}>
-                      {place.name}
-                    </span>
-                  </div>
-                  {(place.description || place.address || cat?.name) && (
-                    <div style={{ marginTop: 2 }}>
-                      <span style={{ fontSize: 11, color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', lineHeight: 1.2 }}>
-                        {place.description || place.address || cat?.name}
-                      </span>
-                    </div>
-                  )}
-                </div>
-                <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
-                  {!inDay && selectedDayId && (
-                    <button
-                      onClick={e => { e.stopPropagation(); onAssignToDay(place.id) }}
-                      style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        width: 20, height: 20, borderRadius: 6,
-                        background: 'var(--bg-hover)', border: 'none', cursor: 'pointer',
-                        color: 'var(--text-faint)', padding: 0, transition: 'background 0.15s, color 0.15s',
-                      }}
-                      onMouseEnter={e => { e.currentTarget.style.background = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent-text)' }}
-                      onMouseLeave={e => { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = 'var(--text-faint)' }}
-                    ><Plus size={12} strokeWidth={2.5} /></button>
-                  )}
-                </div>
-              </div>
+                place={place}
+                category={cat}
+                isSelected={isSelected}
+                isPlanned={isPlanned}
+                inDay={inDay}
+                isChecked={isChecked}
+                selectMode={selectMode}
+                selectedDayId={selectedDayId}
+                canEditPlaces={canEditPlaces}
+                isMobile={isMobile}
+                t={t}
+                onPlaceClick={onPlaceClick}
+                onContextMenu={openContextMenu}
+                onAssignToDay={onAssignToDay}
+                toggleSelected={toggleSelected}
+                setDayPickerPlace={setDayPickerPlace}
+              />
             )
           })
         )}
@@ -602,6 +756,14 @@ const PlacesSidebar = React.memo(function PlacesSidebar({
         initialFile={sidebarDropFile}
       />
       <ContextMenu menu={ctxMenu.menu} onClose={ctxMenu.close} />
+      {isMobile && (
+        <ConfirmDialog
+          isOpen={!!pendingDeleteIds?.length}
+          onClose={() => setPendingDeleteIds(null)}
+          onConfirm={() => { onBulkDeleteConfirm?.(pendingDeleteIds!); setPendingDeleteIds(null) }}
+          message={t('trip.confirm.deletePlaces', { count: pendingDeleteIds?.length ?? 0 })}
+        />
+      )}
     </div>
   )
 })

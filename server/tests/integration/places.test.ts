@@ -771,7 +771,7 @@ describe('KML/KMZ Import', () => {
     expect(res.body.summary.totalPlacemarks).toBe(3);
     expect(res.body.summary.skippedCount).toBe(1);
     expect(Array.isArray(res.body.summary.errors)).toBe(true);
-    expect(res.body.summary.errors.join(' ')).toContain('missing Point coordinates');
+    expect(res.body.summary.errors.join(' ')).toContain('unsupported geometry type');
 
     const nested = res.body.places.find((p: any) => p.name === 'Nested Place');
     expect(nested).toBeDefined();
@@ -862,7 +862,7 @@ describe('GPX Import — edge cases', () => {
       .set('Cookie', authCookie(user.id))
       .attach('file', emptyGpx, { filename: 'empty.gpx', contentType: 'application/gpx+xml' });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/no waypoints/i);
+    expect(res.body.error).toMatch(/no matching places/i);
   });
 });
 

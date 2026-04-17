@@ -36,6 +36,8 @@ export default function FileImportModal({ isOpen, onClose, tripId, pushUndo, ini
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [summary, setSummary] = useState<PlacesImportSummary | null>(null)
+  const [gpxOpts, setGpxOpts] = useState({ waypoints: true, routes: true, tracks: true })
+  const [kmlOpts, setKmlOpts] = useState({ points: true, paths: true })
 
   const validateFile = (f: File): string | null => {
     const ext = f.name.toLowerCase().split('.').pop()
@@ -127,7 +129,7 @@ export default function FileImportModal({ isOpen, onClose, tripId, pushUndo, ini
 
     try {
       if (ext === 'gpx') {
-        const result = await placesApi.importGpx(tripId, file)
+        const result = await placesApi.importGpx(tripId, file, gpxOpts)
         await loadTrip(tripId)
         if (result.count === 0 && result.skipped > 0) {
           toast.warning(t('places.importAllSkipped'))
@@ -137,15 +139,13 @@ export default function FileImportModal({ isOpen, onClose, tripId, pushUndo, ini
         if (result.places?.length > 0) {
           const importedIds: number[] = result.places.map((p: { id: number }) => p.id)
           pushUndo?.(t('undo.importGpx'), async () => {
-            for (const id of importedIds) {
-              try { await placesApi.delete(tripId, id) } catch {}
-            }
+            try { await placesApi.bulkDelete(tripId, importedIds) } catch {}
             await loadTrip(tripId)
           })
         }
         handleClose()
       } else {
-        const result = await placesApi.importMapFile(tripId, file)
+        const result = await placesApi.importMapFile(tripId, file, kmlOpts)
         await loadTrip(tripId)
         setSummary(result.summary || null)
         if (result.count === 0 && (result.summary?.skippedCount ?? 0) > 0) {
@@ -159,9 +159,7 @@ export default function FileImportModal({ isOpen, onClose, tripId, pushUndo, ini
         if (result.places?.length > 0) {
           const importedIds: number[] = result.places.map((p: { id: number }) => p.id)
           pushUndo?.(t('undo.importKeyholeMarkup'), async () => {
-            for (const id of importedIds) {
-              try { await placesApi.delete(tripId, id) } catch {}
-            }
+            try { await placesApi.bulkDelete(tripId, importedIds) } catch {}
             await loadTrip(tripId)
           })
         }
@@ -177,7 +175,12 @@ export default function FileImportModal({ isOpen, onClose, tripId, pushUndo, ini
     }
   }
 
-  const canImport = !!file && !loading
+  const fileExt = file?.name.toLowerCase().split('.').pop() ?? ''
+  const isGpx = fileExt === 'gpx'
+  const isKml = fileExt === 'kml' || fileExt === 'kmz'
+  const gpxNoneSelected = isGpx && !gpxOpts.waypoints && !gpxOpts.routes && !gpxOpts.tracks
+  const kmlNoneSelected = isKml && !kmlOpts.points && !kmlOpts.paths
+  const canImport = !!file && !loading && !gpxNoneSelected && !kmlNoneSelected
 
   if (!isOpen) return null
 
@@ -241,6 +244,58 @@ export default function FileImportModal({ isOpen, onClose, tripId, pushUndo, ini
             <span style={{ color: 'var(--text-faint)', textAlign: 'center', pointerEvents: 'none' }}>{t('places.importFileDropHere')}</span>
           )}
         </div>
+
+        {isGpx && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {t('places.gpxImportTypes')}
+            </div>
+            {(['waypoints', 'routes', 'tracks'] as const).map(key => (
+              <label key={key} onClick={() => setGpxOpts(prev => ({ ...prev, [key]: !prev[key] }))} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', cursor: 'pointer' }}>
+                <div style={{
+                  width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                  border: gpxOpts[key] ? 'none' : '1.5px solid var(--border-primary)',
+                  background: gpxOpts[key] ? 'var(--accent)' : 'transparent',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  {gpxOpts[key] && <svg width="10" height="10" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2" stroke="white" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                </div>
+                <span style={{ fontSize: 12, color: 'var(--text-primary)', userSelect: 'none' }}>
+                  {t(key === 'waypoints' ? 'places.gpxImportWaypoints' : key === 'routes' ? 'places.gpxImportRoutes' : 'places.gpxImportTracks')}
+                </span>
+              </label>
+            ))}
+            {gpxNoneSelected && (
+              <div style={{ fontSize: 11, color: '#b45309', marginTop: 4 }}>{t('places.gpxImportNoneSelected')}</div>
+            )}
+          </div>
+        )}
+
+        {isKml && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {t('places.kmlImportTypes')}
+            </div>
+            {(['points', 'paths'] as const).map(key => (
+              <label key={key} onClick={() => setKmlOpts(prev => ({ ...prev, [key]: !prev[key] }))} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', cursor: 'pointer' }}>
+                <div style={{
+                  width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                  border: kmlOpts[key] ? 'none' : '1.5px solid var(--border-primary)',
+                  background: kmlOpts[key] ? 'var(--accent)' : 'transparent',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  {kmlOpts[key] && <svg width="10" height="10" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2" stroke="white" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                </div>
+                <span style={{ fontSize: 12, color: 'var(--text-primary)', userSelect: 'none' }}>
+                  {t(key === 'points' ? 'places.kmlImportPoints' : 'places.kmlImportPaths')}
+                </span>
+              </label>
+            ))}
+            {kmlNoneSelected && (
+              <div style={{ fontSize: 11, color: '#b45309', marginTop: 4 }}>{t('places.kmlImportNoneSelected')}</div>
+            )}
+          </div>
+        )}
 
         {summary && (
           <div style={{
