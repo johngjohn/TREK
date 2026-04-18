@@ -908,6 +908,8 @@ const de: Record<string, string | { name: string; category: string }[]> = {
   'dayplan.cannotDropOnTimed': 'Orte können nicht zwischen zeitgebundene Einträge geschoben werden',
   'dayplan.cannotBreakChronology': 'Die zeitliche Reihenfolge von Uhrzeiten und Buchungen darf nicht verletzt werden',
   'dayplan.addNote': 'Notiz hinzufügen',
+  'dayplan.expandAll': 'Alle Tage ausklappen',
+  'dayplan.collapseAll': 'Alle Tage einklappen',
   'dayplan.editNote': 'Notiz bearbeiten',
   'dayplan.noteAdd': 'Notiz hinzufügen',
   'dayplan.noteEdit': 'Notiz bearbeiten',

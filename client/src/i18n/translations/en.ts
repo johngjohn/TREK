@@ -965,6 +965,8 @@ const en: Record<string, string | { name: string; category: string }[]> = {
   'dayplan.cannotDropOnTimed': 'Items cannot be placed between time-bound entries',
   'dayplan.cannotBreakChronology': 'This would break the chronological order of timed items and bookings',
   'dayplan.addNote': 'Add Note',
+  'dayplan.expandAll': 'Expand all days',
+  'dayplan.collapseAll': 'Collapse all days',
   'dayplan.editNote': 'Edit Note',
   'dayplan.noteAdd': 'Add Note',
   'dayplan.noteEdit': 'Edit Note',
