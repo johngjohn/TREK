@@ -1,12 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
 import { z } from 'zod';
-import { canAccessTrip } from '../../db/database';
+import { canAccessTrip, db } from '../../db/database';
 import { isDemoUser } from '../../services/authService';
 import {
   getDay, updateDay, validateAccommodationRefs,
   createDay, deleteDay,
   createAccommodation, getAccommodation, updateAccommodation, deleteAccommodation,
 } from '../../services/dayService';
+import { createPlace } from '../../services/placeService';
 import {
   createNote as createDayNote, getNote as getDayNote, updateNote as updateDayNote,
   deleteNote as deleteDayNote, dayExists as dayNoteExists,
@@ -109,6 +110,53 @@ export function registerDayTools(server: McpServer, userId: number, scopes: stri
       const accommodation = createAccommodation(tripId, { place_id, start_day_id, end_day_id, check_in, check_out, confirmation, notes });
       safeBroadcast(tripId, 'accommodation:created', { accommodation });
       return ok({ accommodation });
+    }
+  );
+
+  server.registerTool(
+    'create_place_accommodation',
+    {
+      description: 'Create a new place and immediately set it as an accommodation for a date range in one atomic operation. Use place details from search_place results. Only use when the place does not yet exist — if it already exists, use create_accommodation directly.',
+      inputSchema: {
+        tripId: z.number().int().positive(),
+        name: z.string().min(1).max(200),
+        description: z.string().max(2000).optional(),
+        lat: z.number().optional(),
+        lng: z.number().optional(),
+        address: z.string().max(500).optional(),
+        category_id: z.number().int().positive().optional().describe('Category ID — use list_categories to see available options'),
+        google_place_id: z.string().optional().describe('Google Place ID from search_place — enables opening hours display'),
+        osm_id: z.string().optional().describe('OpenStreetMap ID from search_place (e.g. "way:12345")'),
+        place_notes: z.string().max(2000).optional().describe('Notes for the place'),
+        website: z.string().max(500).optional(),
+        phone: z.string().max(50).optional(),
+        start_day_id: z.number().int().positive().describe('Check-in day ID'),
+        end_day_id: z.number().int().positive().describe('Check-out day ID'),
+        check_in: z.string().max(10).optional().describe('Check-in time e.g. "15:00"'),
+        check_out: z.string().max(10).optional().describe('Check-out time e.g. "11:00"'),
+        confirmation: z.string().max(100).optional(),
+        accommodation_notes: z.string().max(1000).optional().describe('Notes for the accommodation'),
+      },
+      annotations: TOOL_ANNOTATIONS_NON_IDEMPOTENT,
+    },
+    async ({ tripId, name, description, lat, lng, address, category_id, google_place_id, osm_id, place_notes, website, phone, start_day_id, end_day_id, check_in, check_out, confirmation, accommodation_notes }) => {
+      if (isDemoUser(userId)) return demoDenied();
+      if (!canAccessTrip(tripId, userId)) return noAccess();
+      const dayErrors = validateAccommodationRefs(tripId, undefined, start_day_id, end_day_id);
+      if (dayErrors.length > 0) return { content: [{ type: 'text' as const, text: dayErrors.map(e => e.message).join(', ') }], isError: true };
+      try {
+        const run = db.transaction(() => {
+          const place = createPlace(String(tripId), { name, description, lat, lng, address, category_id, google_place_id, osm_id, notes: place_notes, website, phone });
+          const accommodation = createAccommodation(tripId, { place_id: place.id, start_day_id, end_day_id, check_in, check_out, confirmation, notes: accommodation_notes });
+          return { place, accommodation };
+        });
+        const result = run();
+        safeBroadcast(tripId, 'place:created', { place: result.place });
+        safeBroadcast(tripId, 'accommodation:created', { accommodation: result.accommodation });
+        return ok(result);
+      } catch {
+        return { content: [{ type: 'text' as const, text: 'Failed to create place and accommodation.' }], isError: true };
+      }
     }
   );
 

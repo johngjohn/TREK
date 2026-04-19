@@ -1,8 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
 import { z } from 'zod';
-import { canAccessTrip } from '../../db/database';
+import { canAccessTrip, db } from '../../db/database';
 import { isDemoUser } from '../../services/authService';
-import { listPlaces, createPlace, updatePlace, deletePlace } from '../../services/placeService';
+import { deletePlacesMany, importGoogleList, importNaverList, listPlaces, createPlace, updatePlace, deletePlace } from '../../services/placeService';
+import { createAssignment, dayExists } from '../../services/assignmentService';
+import { onPlaceDeleted } from '../../services/journeyService';
 import { listCategories } from '../../services/categoryService';
 import { searchPlaces } from '../../services/mapsService';
 import {
@@ -44,6 +46,48 @@ export function registerPlaceTools(server: McpServer, userId: number, scopes: st
       const place = createPlace(String(tripId), { name, description, lat, lng, address, category_id, google_place_id, osm_id, notes, website, phone });
       safeBroadcast(tripId, 'place:created', { place });
       return ok({ place });
+    }
+  );
+
+  if (W) server.registerTool(
+    'create_and_assign_place',
+    {
+      description: 'Create a new place and immediately assign it to a day in one atomic operation. Use place details from search_place results. Only use when the place does not yet exist — if it already exists, use assign_place_to_day directly.',
+      inputSchema: {
+        tripId: z.number().int().positive(),
+        dayId: z.number().int().positive().describe('Day to assign the place to'),
+        name: z.string().min(1).max(200),
+        description: z.string().max(2000).optional(),
+        lat: z.number().optional(),
+        lng: z.number().optional(),
+        address: z.string().max(500).optional(),
+        category_id: z.number().int().positive().optional().describe('Category ID — use list_categories to see available options'),
+        google_place_id: z.string().optional().describe('Google Place ID from search_place — enables opening hours display'),
+        osm_id: z.string().optional().describe('OpenStreetMap ID from search_place (e.g. "way:12345")'),
+        place_notes: z.string().max(2000).optional().describe('Notes for the place'),
+        website: z.string().max(500).optional(),
+        phone: z.string().max(50).optional(),
+        assignment_notes: z.string().max(500).optional().describe('Notes for this day assignment'),
+      },
+      annotations: TOOL_ANNOTATIONS_NON_IDEMPOTENT,
+    },
+    async ({ tripId, dayId, name, description, lat, lng, address, category_id, google_place_id, osm_id, place_notes, website, phone, assignment_notes }) => {
+      if (isDemoUser(userId)) return demoDenied();
+      if (!canAccessTrip(tripId, userId)) return noAccess();
+      if (!dayExists(dayId, tripId)) return { content: [{ type: 'text' as const, text: 'Day not found.' }], isError: true };
+      try {
+        const run = db.transaction(() => {
+          const place = createPlace(String(tripId), { name, description, lat, lng, address, category_id, google_place_id, osm_id, notes: place_notes, website, phone });
+          const assignment = createAssignment(dayId, place.id, assignment_notes ?? null);
+          return { place, assignment };
+        });
+        const result = run();
+        safeBroadcast(tripId, 'place:created', { place: result.place });
+        safeBroadcast(tripId, 'assignment:created', { assignment: result.assignment });
+        return ok(result);
+      } catch {
+        return { content: [{ type: 'text' as const, text: 'Failed to create place and assignment.' }], isError: true };
+      }
     }
   );
 
@@ -157,6 +201,59 @@ export function registerPlaceTools(server: McpServer, userId: number, scopes: st
       } catch {
         return { content: [{ type: 'text' as const, text: 'Place search failed.' }], isError: true };
       }
+    }
+  );
+
+  if (W) server.registerTool(
+    'import_places_from_url',
+    {
+      description: 'Import places from a shared Google Maps or Naver Maps list URL. Returns the imported places and count. The list must be shared publicly.',
+      inputSchema: {
+        tripId: z.number().int().positive(),
+        url: z.string().url().describe('Publicly shared Google Maps list URL (maps.app.goo.gl/...) or Naver Maps list URL'),
+        source: z.enum(['google-list', 'naver-list']).describe('List source: "google-list" for Google Maps saved places, "naver-list" for Naver Maps'),
+      },
+      annotations: TOOL_ANNOTATIONS_NON_IDEMPOTENT,
+    },
+    async ({ tripId, url, source }) => {
+      if (isDemoUser(userId)) return demoDenied();
+      if (!canAccessTrip(tripId, userId)) return noAccess();
+
+      const result = source === 'google-list'
+        ? await importGoogleList(String(tripId), url)
+        : await importNaverList(String(tripId), url);
+
+      if ('error' in result) {
+        return { content: [{ type: 'text' as const, text: result.error }], isError: true };
+      }
+
+      for (const place of result.places) {
+        safeBroadcast(tripId, 'place:created', { place });
+      }
+      return ok({ places: result.places, count: result.places.length, listName: result.listName, skipped: result.skipped });
+    }
+  );
+
+  if (W) server.registerTool(
+    'bulk_delete_places',
+    {
+      description: 'Delete multiple places from a trip at once. Removes all day assignments for each place as well. Warn the user before calling this — it cannot be undone.',
+      inputSchema: {
+        tripId: z.number().int().positive(),
+        placeIds: z.array(z.number().int().positive()).min(1).max(200),
+      },
+      annotations: TOOL_ANNOTATIONS_DELETE,
+    },
+    async ({ tripId, placeIds }) => {
+      if (isDemoUser(userId)) return demoDenied();
+      if (!canAccessTrip(tripId, userId)) return noAccess();
+
+      const deleted = deletePlacesMany(String(tripId), placeIds);
+      for (const id of deleted) {
+        safeBroadcast(tripId, 'place:deleted', { placeId: id });
+        try { onPlaceDeleted(id); } catch {}
+      }
+      return ok({ deleted, count: deleted.length });
     }
   );
 }

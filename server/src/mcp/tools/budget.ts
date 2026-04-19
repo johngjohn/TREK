@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
 import { z } from 'zod';
-import { canAccessTrip } from '../../db/database';
+import { canAccessTrip, db } from '../../db/database';
 import { isDemoUser } from '../../services/authService';
 import {
   createBudgetItem, updateBudgetItem, deleteBudgetItem,
@@ -93,6 +93,42 @@ export function registerBudgetTools(server: McpServer, userId: number, scopes: s
   );
 
   // --- BUDGET ADVANCED ---
+
+  if (W) server.registerTool(
+    'create_budget_item_with_members',
+    {
+      description: 'Create a budget/expense item and optionally set the trip members splitting it in one atomic operation. If userIds is omitted or empty, behaves like create_budget_item. Only use when the place does not yet exist — if it already exists, use set_budget_item_members directly.',
+      inputSchema: {
+        tripId: z.number().int().positive(),
+        name: z.string().min(1).max(200),
+        category: z.string().max(100).optional().describe('Budget category (e.g. Accommodation, Food, Transport)'),
+        total_price: z.number().nonnegative(),
+        note: z.string().max(500).optional(),
+        userIds: z.array(z.number().int().positive()).optional().describe('User IDs splitting this item; omit or pass empty array to skip member assignment'),
+      },
+      annotations: TOOL_ANNOTATIONS_NON_IDEMPOTENT,
+    },
+    async ({ tripId, name, category, total_price, note, userIds }) => {
+      if (isDemoUser(userId)) return demoDenied();
+      if (!canAccessTrip(tripId, userId)) return noAccess();
+      const hasMembers = userIds && userIds.length > 0;
+      try {
+        const run = db.transaction(() => {
+          const item = createBudgetItem(tripId, { category, name, total_price, note });
+          if (hasMembers) {
+            return updateBudgetMembers(item.id, tripId, userIds!);
+          }
+          return { item };
+        });
+        const result = run();
+        safeBroadcast(tripId, 'budget:created', { item: (result as any).item ?? result });
+        if (hasMembers) safeBroadcast(tripId, 'budget:members-updated', { item: result });
+        return ok({ item: result });
+      } catch {
+        return { content: [{ type: 'text' as const, text: 'Failed to create budget item.' }], isError: true };
+      }
+    }
+  );
 
   if (W) server.registerTool(
     'set_budget_item_members',
