@@ -417,12 +417,17 @@ export function ReservationModal({ isOpen, onClose, onSave, reservation, days, p
                 <CustomSelect
                   value={form.hotel_place_id}
                   onChange={value => {
-                    set('hotel_place_id', value)
                     const p = places.find(pl => pl.id === value)
-                    if (p) {
-                      if (!form.title) set('title', p.name)
-                      if (!form.location && p.address) set('location', p.address)
-                    }
+                    setForm(prev => {
+                      const next = { ...prev, hotel_place_id: value }
+                      if (!value) {
+                        next.location = ''
+                      } else if (p) {
+                        if (!prev.title) next.title = p.name
+                        if (!prev.location && p.address) next.location = p.address
+                      }
+                      return next
+                    })
                   }}
                   placeholder={t('reservations.meta.pickHotel')}
                   options={[
