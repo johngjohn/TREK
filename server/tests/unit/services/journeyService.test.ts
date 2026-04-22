@@ -1325,9 +1325,10 @@ describe('Edge cases', () => {
     const result = deleteEntry(entry.id, user.id);
     expect(result).toBe(true);
 
-    // Photo should be deleted with the entry
-    const deletedPhoto = testDb.prepare('SELECT * FROM journey_photos WHERE id = ?').get(photo!.id) as any;
-    expect(deletedPhoto).toBeUndefined();
+    // Junction row must be gone (ON DELETE CASCADE from journey_entries).
+    // Gallery row (journey_photos) is preserved — photo may belong to other entries.
+    const junctionRow = testDb.prepare('SELECT * FROM journey_entry_photos WHERE entry_id = ?').get(entry.id) as any;
+    expect(junctionRow).toBeUndefined();
   });
 
   it('JOURNEY-SVC-082: updateJourney can set cover_gradient', () => {
@@ -1395,17 +1396,12 @@ describe('Edge cases', () => {
 
     addTripToJourney(journey.id, trip.id, user.id);
 
-    // Should have a [Trip Photos] entry with the imported photo
-    const photoEntry = testDb.prepare(
-      "SELECT * FROM journey_entries WHERE journey_id = ? AND title = '[Trip Photos]'"
-    ).get(journey.id) as any;
-    expect(photoEntry).toBeDefined();
-
+    // Trip photos now go straight into the journey gallery (no wrapper entry).
     const photos = testDb.prepare(`
       SELECT jp.*, tkp.asset_id FROM journey_photos jp
       JOIN trek_photos tkp ON tkp.id = jp.photo_id
-      WHERE jp.entry_id = ?
-    `).all(photoEntry.id);
+      WHERE jp.journey_id = ?
+    `).all(journey.id);
     expect(photos.length).toBe(1);
     expect((photos[0] as any).asset_id).toBe('immich-photo-1');
   });

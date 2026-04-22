@@ -781,22 +781,20 @@ export function updatePhoto(photoId: number, userId: number, data: { caption?: s
   if (!row) return null;
   if (!canEdit(row.journey_id, userId)) return null;
 
-  const fields: string[] = [];
-  const values: unknown[] = [];
-  if (data.caption !== undefined) { fields.push('caption = ?'); values.push(data.caption); }
-  if (data.sort_order !== undefined) { fields.push('sort_order = ?'); values.push(data.sort_order); }
-  if (!fields.length) {
-    // no-op: return some photo row for this gallery item (first entry link)
-    return db.prepare(`SELECT ${JP_SELECT} FROM ${JP_JOIN} WHERE gp.id = ? LIMIT 1`).get(photoId) as JourneyPhoto | null;
+  // caption lives on the gallery row; sort_order lives on the junction table
+  // (JP_SELECT reads jep.sort_order, so updating journey_photos.sort_order
+  // would not be reflected in the returned row).
+  if (data.caption !== undefined) {
+    db.prepare('UPDATE journey_photos SET caption = ? WHERE id = ?').run(data.caption, photoId);
   }
-
-  values.push(photoId);
-  db.prepare(`UPDATE journey_photos SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  if (data.sort_order !== undefined) {
+    db.prepare('UPDATE journey_entry_photos SET sort_order = ? WHERE journey_photo_id = ?').run(data.sort_order, photoId);
+  }
   return db.prepare(`SELECT ${JP_SELECT} FROM ${JP_JOIN} WHERE gp.id = ? LIMIT 1`).get(photoId) as JourneyPhoto | null;
 }
 
 // deletePhoto: hard-delete (backwards compat name used by old route).
-export function deletePhoto(photoId: number, userId: number): { photo_id: number; file_path?: string | null; journey_id: number } | null {
+export function deletePhoto(photoId: number, userId: number): { id: number; photo_id: number; file_path?: string | null; journey_id: number } | null {
   const row = db.prepare('SELECT id, journey_id, photo_id FROM journey_photos WHERE id = ?').get(photoId) as { id: number; journey_id: number; photo_id: number } | undefined;
   if (!row) return null;
   if (!canEdit(row.journey_id, userId)) return null;
@@ -806,7 +804,7 @@ export function deletePhoto(photoId: number, userId: number): { photo_id: number
   db.prepare('DELETE FROM journey_photos WHERE id = ?').run(photoId);
   deleteTrekPhotoIfOrphan(row.photo_id);
 
-  return { photo_id: row.photo_id, file_path: trekRow?.file_path ?? null, journey_id: row.journey_id };
+  return { id: row.id, photo_id: row.photo_id, file_path: trekRow?.file_path ?? null, journey_id: row.journey_id };
 }
 
 // ── Contributors ─────────────────────────────────────────────────────────
