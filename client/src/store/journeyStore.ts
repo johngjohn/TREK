@@ -223,10 +223,8 @@ export const useJourneyStore = create<JourneyState>((set, get) => ({
       )
       entries.sort((a, b) => {
         if (a.entry_date !== b.entry_date) return a.entry_date.localeCompare(b.entry_date)
-        const atime = a.entry_time || ''
-        const btime = b.entry_time || ''
-        if (atime !== btime) return atime.localeCompare(btime)
-        return (a.sort_order || 0) - (b.sort_order || 0)
+        if (a.sort_order !== b.sort_order) return (a.sort_order || 0) - (b.sort_order || 0)
+        return a.id - b.id
       })
       return { current: { ...s.current, entries } }
     })

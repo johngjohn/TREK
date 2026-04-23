@@ -2107,6 +2107,29 @@ function runMigrations(db: Database.Database): void {
               != substr(reservations.reservation_time, 1, 10)
       `);
     },
+    // #846: make sort_order authoritative within a day. Previous ORDER BY put
+    // entry_time before sort_order, silently ignoring reorder clicks when two
+    // same-date entries had different times. Backfill renumbers using the old
+    // effective key (entry_time ASC, id ASC) so existing journeys retain their
+    // current visual order.
+    () => {
+      db.exec(`
+        WITH ranked AS (
+          SELECT id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY journey_id, entry_date
+                   ORDER BY entry_time ASC, id ASC
+                 ) - 1 AS rn
+          FROM journey_entries
+        )
+        UPDATE journey_entries
+        SET sort_order = (SELECT rn FROM ranked WHERE ranked.id = journey_entries.id)
+      `);
+      db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_journey_entries_order ' +
+        'ON journey_entries(journey_id, entry_date, sort_order)'
+      );
+    },
   ];
 
   if (currentVersion < migrations.length) {

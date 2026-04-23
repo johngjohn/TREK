@@ -120,7 +120,7 @@ export function getJourneyFull(journeyId: number, userId: number) {
   if (!journey) return null;
 
   const entries = db.prepare(
-    'SELECT * FROM journey_entries WHERE journey_id = ? ORDER BY entry_date ASC, entry_time ASC, sort_order ASC'
+    'SELECT * FROM journey_entries WHERE journey_id = ? ORDER BY entry_date ASC, sort_order ASC, id ASC'
   ).all(journeyId) as JourneyEntry[];
 
   const photos = db.prepare(
@@ -306,12 +306,21 @@ export function syncTripPlaces(journeyId: number, tripId: number, authorId: numb
   ).all(journeyId, tripId) as { source_place_id: number }[];
   const existingPlaceIds = new Set(existing.map(e => e.source_place_id));
 
+  // Track next sort_order per date so synced skeletons get unique, sequential positions.
+  const dateMaxOrder = new Map<string, number>();
+  const maxRows = db.prepare(
+    'SELECT entry_date, COALESCE(MAX(sort_order), -1) AS m FROM journey_entries WHERE journey_id = ? GROUP BY entry_date'
+  ).all(journeyId) as { entry_date: string; m: number }[];
+  for (const row of maxRows) dateMaxOrder.set(row.entry_date, row.m);
+
   for (const place of places) {
     if (existingPlaceIds.has(place.id)) continue;
     existingPlaceIds.add(place.id);
 
     const entryDate = place.day_date || new Date().toISOString().split('T')[0];
     const entryTime = place.assignment_time || place.place_time || null;
+    const nextOrder = (dateMaxOrder.get(entryDate) ?? -1) + 1;
+    dateMaxOrder.set(entryDate, nextOrder);
 
     db.prepare(`
       INSERT INTO journey_entries (journey_id, source_trip_id, source_place_id, author_id, type, title, entry_date, entry_time, location_name, location_lat, location_lng, sort_order, created_at, updated_at)
@@ -320,7 +329,7 @@ export function syncTripPlaces(journeyId: number, tripId: number, authorId: numb
       journeyId, tripId, place.id, authorId,
       place.name, entryDate, entryTime,
       place.address || place.name, place.lat || null, place.lng || null,
-      place.day_number || 0, now, now
+      nextOrder, now, now
     );
   }
 }
@@ -367,15 +376,19 @@ export function onPlaceCreated(tripId: number, placeId: number) {
 
     const journey = db.prepare('SELECT user_id FROM journeys WHERE id = ?').get(link.journey_id) as { user_id: number };
     const entryDate = place.day_date;
+    const maxOrder = db.prepare(
+      'SELECT MAX(sort_order) AS m FROM journey_entries WHERE journey_id = ? AND entry_date = ?'
+    ).get(link.journey_id, entryDate) as { m: number | null };
+    const nextOrder = (maxOrder?.m ?? -1) + 1;
 
     db.prepare(`
       INSERT INTO journey_entries (journey_id, source_trip_id, source_place_id, author_id, type, title, entry_date, entry_time, location_name, location_lat, location_lng, sort_order, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 'skeleton', ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      VALUES (?, ?, ?, ?, 'skeleton', ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       link.journey_id, tripId, placeId, journey.user_id,
       place.name, entryDate, place.assignment_time || place.place_time || null,
       place.address || place.name, place.lat || null, place.lng || null,
-      now, now
+      nextOrder, now, now
     );
   }
 }
@@ -451,7 +464,7 @@ export function listEntries(journeyId: number, userId: number) {
   if (!canAccessJourney(journeyId, userId)) return null;
 
   const entries = db.prepare(
-    'SELECT * FROM journey_entries WHERE journey_id = ? ORDER BY entry_date ASC, entry_time ASC, sort_order ASC'
+    'SELECT * FROM journey_entries WHERE journey_id = ? ORDER BY entry_date ASC, sort_order ASC, id ASC'
   ).all(journeyId) as JourneyEntry[];
 
   const photos = db.prepare(
