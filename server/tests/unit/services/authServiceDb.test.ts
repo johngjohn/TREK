@@ -88,6 +88,8 @@ import {
   verifyMfaLogin,
   createMcpToken,
   deleteMcpToken,
+  requestPasswordReset,
+  isPlaceholderEmail,
 } from '../../../src/services/authService';
 
 // ---------------------------------------------------------------------------
@@ -517,43 +519,105 @@ describe('validateInviteToken', () => {
 });
 
 // ---------------------------------------------------------------------------
-// registerUser — OIDC-only / registration-disabled
+// registerUser — invite-only + placeholder email behavior
 // ---------------------------------------------------------------------------
 
-describe('registerUser — OIDC-only / registration-disabled', () => {
-  it('AUTH-DB-033: returns 403 when oidc_only=true and not first user', () => {
-    createUser(testDb); // ensure userCount > 0
-    testDb.prepare("INSERT INTO app_settings (key, value) VALUES ('oidc_only', 'true')").run();
-    testDb.prepare("INSERT INTO app_settings (key, value) VALUES ('oidc_issuer', 'https://x')").run();
-    testDb.prepare("INSERT INTO app_settings (key, value) VALUES ('oidc_client_id', 'id')").run();
-
-    const result = registerUser({ username: 'u', email: 'new@x.com', password: 'Secure123!' });
-    expect(result.status).toBe(403);
-    expect(result.error).toMatch(/password registration is disabled/i);
+describe('registerUser — invite-only + placeholder email behavior', () => {
+  it('AUTH-DB-033: first-user bootstrap works without invite', () => {
+    const result = registerUser({ username: 'bootstrap', email: 'admin@example.com', password: 'Secure123!' });
+    expect(result.status).toBeUndefined();
+    const created = testDb.prepare('SELECT role FROM users WHERE username = ?').get('bootstrap') as { role: string } | undefined;
+    expect(created?.role).toBe('admin');
   });
 
-  it('AUTH-DB-034: returns 403 when registration is disabled and no invite', () => {
+  it('AUTH-DB-034: rejects registration without invite after bootstrap', () => {
     createUser(testDb); // ensure userCount > 0
-    testDb.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('allow_registration', 'false')").run();
-
-    const result = registerUser({ username: 'u2', email: 'n2@x.com', password: 'Secure123!' });
+    const result = registerUser({ username: 'u2', password: 'Secure123!' });
     expect(result.status).toBe(403);
+    expect(result.error).toMatch(/invite link is required/i);
+  });
+
+  it('AUTH-DB-035: invite registration succeeds with username+password and no email', () => {
+    createUser(testDb, { role: 'admin' });
+    const invite = createInviteToken(testDb, { max_uses: 2 });
+
+    const result = registerUser({ username: 'inviteduser', password: 'Secure123!', invite_token: invite.token });
+    expect(result.status).toBeUndefined();
+    const created = testDb.prepare('SELECT email FROM users WHERE username = ?').get('inviteduser') as { email: string } | undefined;
+    expect(created).toBeDefined();
+    expect(isPlaceholderEmail(created?.email)).toBe(true);
+    const inviteRow = testDb.prepare('SELECT used_count FROM invite_tokens WHERE id = ?').get(invite.id) as { used_count: number } | undefined;
+    expect(inviteRow?.used_count).toBe(1);
+  });
+
+  it('AUTH-DB-036: generated placeholder emails are unique across invite signups', () => {
+    createUser(testDb, { role: 'admin' });
+    const invite = createInviteToken(testDb, { max_uses: 0 }); // unlimited
+
+    const a = registerUser({ username: 'same', password: 'Secure123!', invite_token: invite.token });
+    const b = registerUser({ username: 'same2', password: 'Secure123!', invite_token: invite.token });
+    expect(a.status).toBeUndefined();
+    expect(b.status).toBeUndefined();
+
+    const emails = testDb.prepare('SELECT email FROM users WHERE username IN (?, ?) ORDER BY username').all('same', 'same2') as Array<{ email: string }>;
+    expect(emails).toHaveLength(2);
+    expect(emails[0].email).not.toBe(emails[1].email);
+  });
+
+  it('AUTH-DB-037: valid invite can register even when password registration is disabled', () => {
+    createUser(testDb, { role: 'admin' });
+    const invite = createInviteToken(testDb);
+    testDb.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('oidc_only', 'true')").run();
+    testDb.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('oidc_issuer', 'https://x')").run();
+    testDb.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('oidc_client_id', 'id')").run();
+
+    const result = registerUser({ username: 'u', password: 'Secure123!', invite_token: invite.token });
+    expect(result.status).toBeUndefined();
+    expect(result.token).toBeDefined();
   });
 });
 
 // ---------------------------------------------------------------------------
-// loginUser — OIDC-only mode
+// loginUser — username/email compatibility + OIDC-only
 // ---------------------------------------------------------------------------
 
-describe('loginUser — OIDC-only mode', () => {
-  it('AUTH-DB-035: returns 403 when oidc_only=true', () => {
+describe('loginUser — username/email compatibility + OIDC-only', () => {
+  it('AUTH-DB-038: supports login via username', () => {
+    const { user, password } = createUser(testDb, { username: 'loginname' });
+    const result = loginUser({ identifier: user.username, password });
+    expect(result.status).toBeUndefined();
+    expect(result.token).toBeDefined();
+  });
+
+  it('AUTH-DB-039: keeps existing email login working', () => {
+    const { user, password } = createUser(testDb);
+    const result = loginUser({ identifier: user.email, password });
+    expect(result.status).toBeUndefined();
+    expect(result.token).toBeDefined();
+  });
+
+  it('AUTH-DB-040: returns 403 when oidc_only=true', () => {
     const { user, password } = createUser(testDb);
     testDb.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('oidc_only', 'true')").run();
     testDb.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('oidc_issuer', 'https://x')").run();
     testDb.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('oidc_client_id', 'id')").run();
 
-    const result = loginUser({ email: user.email, password });
+    const result = loginUser({ identifier: user.email, password });
     expect(result.status).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// requestPasswordReset — placeholder email users
+// ---------------------------------------------------------------------------
+
+describe('requestPasswordReset — placeholder email users', () => {
+  it('AUTH-DB-041: does not issue reset token for placeholder-email accounts', () => {
+    const { user } = createUser(testDb, { email: 'i.user.abcdef1234567890@placeholder.trek.invalid' });
+    const result = requestPasswordReset(user.email, '127.0.0.1');
+    expect(result.reason).toBe('no_recovery_email');
+    const count = (testDb.prepare('SELECT COUNT(*) as c FROM password_reset_tokens WHERE user_id = ?').get(user.id) as { c: number }).c;
+    expect(count).toBe(0);
   });
 });
 

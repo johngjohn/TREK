@@ -106,6 +106,14 @@ describe('Login', () => {
     expect(res.body.error).toContain('Invalid email or password');
   });
 
+  it('AUTH-040 — login with username succeeds (username-or-email compatibility)', async () => {
+    const { user, password } = createUser(testDb, { username: 'loginbyname' });
+    const res = await request(app).post('/api/auth/login').send({ identifier: user.username, password });
+    expect(res.status).toBe(200);
+    expect(res.body.user).toBeDefined();
+    expect(res.body.user.username).toBe('loginbyname');
+  });
+
   it('AUTH-013 — POST /api/auth/logout clears session cookie', async () => {
     const res = await request(app).post('/api/auth/logout');
     expect(res.status).toBe(200);
@@ -159,10 +167,14 @@ describe('Registration', () => {
 
   it('AUTH-008 — registration with duplicate email returns 409', async () => {
     createUser(testDb, { email: 'taken@example.com' });
+    const { user: admin } = createAdmin(testDb);
+    const invite = createInviteToken(testDb, { created_by: admin.id });
+
     const res = await request(app).post('/api/auth/register').send({
       username: 'newuser',
       email: 'taken@example.com',
       password: 'Str0ng!Pass',
+      invite_token: invite.token,
     });
     expect(res.status).toBe(409);
   });
@@ -186,7 +198,6 @@ describe('Registration', () => {
 
     const res = await request(app).post('/api/auth/register').send({
       username: 'invited',
-      email: 'invited@example.com',
       password: 'Str0ng!Pass',
       invite_token: invite.token,
     });
@@ -194,6 +205,9 @@ describe('Registration', () => {
 
     const row = testDb.prepare('SELECT used_count FROM invite_tokens WHERE id = ?').get(invite.id) as { used_count: number };
     expect(row.used_count).toBe(1);
+
+    const created = testDb.prepare('SELECT email FROM users WHERE username = ?').get('invited') as { email: string } | undefined;
+    expect(created?.email).toMatch(/@placeholder\.trek\.invalid$/i);
   });
 
   it('AUTH-011 — GET /api/auth/invite/:token with expired token returns 410', async () => {
@@ -215,6 +229,26 @@ describe('Registration', () => {
     const res = await request(app).get(`/api/auth/invite/${invite.token}`);
     expect(res.status).toBe(410);
     expect(res.body.error).toMatch(/fully used/i);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Password reset request behavior
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Password reset', () => {
+  it('AUTH-041 — forgot-password returns generic ok and issues no token for placeholder-email accounts', async () => {
+    const { user } = createUser(testDb, { email: 'i.invited.abc123def456@placeholder.trek.invalid' });
+
+    const res = await request(app)
+      .post('/api/auth/forgot-password')
+      .send({ email: user.email });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+
+    const tokenCount = (testDb.prepare('SELECT COUNT(*) as c FROM password_reset_tokens WHERE user_id = ?').get(user.id) as { c: number }).c;
+    expect(tokenCount).toBe(0);
   });
 });
 
@@ -465,10 +499,12 @@ describe('Extended auth scenarios', () => {
 
   it('AUTH-032 — registration with duplicate username returns 409', async () => {
     createUser(testDb, { username: 'alice' });
+    const { user: admin } = createAdmin(testDb);
+    const invite = createInviteToken(testDb, { created_by: admin.id });
 
     const res = await request(app)
       .post('/api/auth/register')
-      .send({ username: 'alice', email: 'alice2@example.com', password: 'Str0ng!Pass' });
+      .send({ username: 'alice', email: 'alice2@example.com', password: 'Str0ng!Pass', invite_token: invite.token });
     expect(res.status).toBe(409);
   });
 

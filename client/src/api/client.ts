@@ -101,9 +101,9 @@ apiClient.interceptors.response.use(
 )
 
 export const authApi = {
-  register: (data: { username: string; email: string; password: string; invite_token?: string }) => apiClient.post('/auth/register', data).then(r => r.data),
+  register: (data: { username: string; password: string; email?: string; invite_token?: string }) => apiClient.post('/auth/register', data).then(r => r.data),
   validateInvite: (token: string) => apiClient.get(`/auth/invite/${token}`).then(r => r.data),
-  login: (data: { email: string; password: string }) => apiClient.post('/auth/login', data).then(r => r.data),
+  login: (data: { identifier?: string; email?: string; password: string }) => apiClient.post('/auth/login', data).then(r => r.data),
   verifyMfaLogin: (data: { mfa_token: string; code: string }) => apiClient.post('/auth/mfa/verify-login', data).then(r => r.data),
   mfaSetup: () => apiClient.post('/auth/mfa/setup', {}).then(r => r.data),
   mfaEnable: (data: { code: string }) => apiClient.post('/auth/mfa/enable', data).then(r => r.data as { success: boolean; mfa_enabled: boolean; backup_codes?: string[] }),

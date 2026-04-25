@@ -8,7 +8,7 @@ import LoginPage from './LoginPage';
 
 // LoginPage uses inline styles for labels (no htmlFor/id pairing).
 // We find inputs by placeholder text.
-const EMAIL_PLACEHOLDER = 'your@email.com';
+const IDENTIFIER_PLACEHOLDER = 'username';
 const PASSWORD_PLACEHOLDER = '••••••••';
 
 beforeEach(() => {
@@ -21,7 +21,7 @@ describe('LoginPage', () => {
       render(<LoginPage />);
       // Wait for appConfig to load (useEffect fetches it)
       await waitFor(() => {
-        expect(screen.getByPlaceholderText(EMAIL_PLACEHOLDER)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
       });
       expect(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER)).toBeInTheDocument();
     });
@@ -33,10 +33,10 @@ describe('LoginPage', () => {
       render(<LoginPage />);
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText(EMAIL_PLACEHOLDER)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
       });
 
-      await user.type(screen.getByPlaceholderText(EMAIL_PLACEHOLDER), 'user@example.com');
+      await user.type(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER), 'user@example.com');
       await user.type(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER), 'password123');
       await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -59,10 +59,10 @@ describe('LoginPage', () => {
       render(<LoginPage />);
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText(EMAIL_PLACEHOLDER)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
       });
 
-      await user.type(screen.getByPlaceholderText(EMAIL_PLACEHOLDER), 'bad@example.com');
+      await user.type(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER), 'bad@example.com');
       await user.type(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER), 'wrongpass');
       await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -88,10 +88,10 @@ describe('LoginPage', () => {
       render(<LoginPage />);
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText(EMAIL_PLACEHOLDER)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
       });
 
-      await user.type(screen.getByPlaceholderText(EMAIL_PLACEHOLDER), 'user@example.com');
+      await user.type(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER), 'user@example.com');
       await user.type(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER), 'password123');
       await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -132,7 +132,6 @@ describe('LoginPage', () => {
       });
 
       await user.type(screen.getByPlaceholderText('admin'), 'newuser');
-      await user.type(screen.getByPlaceholderText(EMAIL_PLACEHOLDER), 'new@example.com');
       await user.type(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER), 'password123');
 
       await user.click(screen.getByRole('button', { name: /create account/i }));
@@ -210,10 +209,10 @@ describe('LoginPage', () => {
       render(<LoginPage />);
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText(EMAIL_PLACEHOLDER)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
       });
 
-      await user.type(screen.getByPlaceholderText(EMAIL_PLACEHOLDER), 'user@example.com');
+      await user.type(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER), 'user@example.com');
       await user.type(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER), 'password123');
       await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -233,10 +232,10 @@ describe('LoginPage', () => {
       render(<LoginPage />);
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText(EMAIL_PLACEHOLDER)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
       });
 
-      await user.type(screen.getByPlaceholderText(EMAIL_PLACEHOLDER), 'user@example.com');
+      await user.type(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER), 'user@example.com');
       await user.type(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER), 'pass1234');
       await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -261,10 +260,10 @@ describe('LoginPage', () => {
       render(<LoginPage />);
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText(EMAIL_PLACEHOLDER)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
       });
 
-      await user.type(screen.getByPlaceholderText(EMAIL_PLACEHOLDER), 'user@example.com');
+      await user.type(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER), 'user@example.com');
       await user.type(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER), 'password123');
       await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -289,10 +288,10 @@ describe('LoginPage', () => {
       render(<LoginPage />);
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText(EMAIL_PLACEHOLDER)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
       });
 
-      await user.type(screen.getByPlaceholderText(EMAIL_PLACEHOLDER), 'user@example.com');
+      await user.type(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER), 'user@example.com');
       await user.type(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER), 'password123');
       await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -324,10 +323,10 @@ describe('LoginPage', () => {
       render(<LoginPage />);
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText(EMAIL_PLACEHOLDER)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
       });
 
-      await user.type(screen.getByPlaceholderText(EMAIL_PLACEHOLDER), 'user@example.com');
+      await user.type(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER), 'user@example.com');
       await user.type(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER), 'password123');
       await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -362,10 +361,10 @@ describe('LoginPage', () => {
       render(<LoginPage />);
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText(EMAIL_PLACEHOLDER)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
       });
 
-      await user.type(screen.getByPlaceholderText(EMAIL_PLACEHOLDER), 'user@example.com');
+      await user.type(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER), 'user@example.com');
       await user.type(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER), 'password123');
       await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -424,7 +423,7 @@ describe('LoginPage', () => {
       render(<LoginPage />);
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText(EMAIL_PLACEHOLDER)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
       });
 
       expect(screen.queryByRole('button', { name: /^register$/i })).toBeNull();
@@ -454,7 +453,7 @@ describe('LoginPage', () => {
       });
 
       await waitFor(() => {
-        expect(screen.queryByPlaceholderText(EMAIL_PLACEHOLDER)).toBeNull();
+        expect(screen.queryByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeNull();
         expect(screen.queryByPlaceholderText(PASSWORD_PLACEHOLDER)).toBeNull();
       });
     });
@@ -480,10 +479,10 @@ describe('LoginPage', () => {
       render(<LoginPage />);
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText(EMAIL_PLACEHOLDER)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
       });
 
-      await user.type(screen.getByPlaceholderText(EMAIL_PLACEHOLDER), 'user@example.com');
+      await user.type(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER), 'user@example.com');
       await user.type(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER), 'password123');
       await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -515,10 +514,10 @@ describe('LoginPage', () => {
       render(<LoginPage />);
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText(EMAIL_PLACEHOLDER)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
       });
 
-      await user.type(screen.getByPlaceholderText(EMAIL_PLACEHOLDER), 'user@example.com');
+      await user.type(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER), 'user@example.com');
       await user.type(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER), 'password123');
       await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -553,7 +552,6 @@ describe('LoginPage', () => {
       });
 
       await user.type(screen.getByPlaceholderText('admin'), 'newuser');
-      await user.type(screen.getByPlaceholderText(EMAIL_PLACEHOLDER), 'new@example.com');
       await user.type(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER), 'short');
       await user.click(screen.getByRole('button', { name: /create account/i }));
 

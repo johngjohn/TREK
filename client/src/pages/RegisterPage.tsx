@@ -2,12 +2,11 @@ import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
 import { useTranslation } from '../i18n'
-import { Map, Eye, EyeOff, Mail, Lock, User } from 'lucide-react'
+import { Map, Eye, EyeOff, Lock, User } from 'lucide-react'
 
 export default function RegisterPage(): React.ReactElement {
   const { t } = useTranslation()
   const [username, setUsername] = useState<string>('')
-  const [email, setEmail] = useState<string>('')
   const [password, setPassword] = useState<string>('')
   const [confirmPassword, setConfirmPassword] = useState<string>('')
   const [showPassword, setShowPassword] = useState<boolean>(false)
@@ -33,7 +32,7 @@ export default function RegisterPage(): React.ReactElement {
 
     setIsLoading(true)
     try {
-      await register(username, email, password)
+      await register(username, password)
       navigate('/dashboard')
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : t('register.failed'))
@@ -100,21 +99,6 @@ export default function RegisterPage(): React.ReactElement {
                     required
                     placeholder="johndoe"
                     minLength={3}
-                    className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-slate-400 focus:border-transparent transition-[border-color,box-shadow] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)]"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">{t('common.email')}</label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)}
-                    required
-                    placeholder="your@email.com"
                     className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-slate-400 focus:border-transparent transition-[border-color,box-shadow] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)]"
                   />
                 </div>

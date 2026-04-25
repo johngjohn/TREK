@@ -6,7 +6,7 @@ import { SUPPORTED_LANGUAGES, useTranslation, detectBrowserLanguage } from '../i
 import { authApi, configApi } from '../api/client'
 import { hasStoredLanguage } from '../store/settingsStore'
 import { getApiErrorMessage } from '../types'
-import { Plane, Eye, EyeOff, Mail, Lock, MapPin, Calendar, Package, User, Globe, Zap, Users, Wallet, Map, CheckSquare, BookMarked, FolderOpen, Route, Shield, KeyRound, ChevronDown } from 'lucide-react'
+import { Plane, Eye, EyeOff, Lock, MapPin, Calendar, Package, User, Globe, Zap, Users, Wallet, Map, CheckSquare, BookMarked, FolderOpen, Route, Shield, KeyRound, ChevronDown } from 'lucide-react'
 
 interface AppConfig {
   has_users: boolean
@@ -27,7 +27,7 @@ export default function LoginPage(): React.ReactElement {
   const { t, language } = useTranslation()
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [username, setUsername] = useState<string>('')
-  const [email, setEmail] = useState<string>('')
+  const [identifier, setIdentifier] = useState<string>('')
   const [password, setPassword] = useState<string>('')
   const [showPassword, setShowPassword] = useState<boolean>(false)
   const [isLoading, setIsLoading] = useState<boolean>(false)
@@ -203,9 +203,9 @@ export default function LoginPage(): React.ReactElement {
       if (mode === 'register') {
         if (!username.trim()) { setError(t('login.usernameRequired')); setIsLoading(false); return }
         if (password.length < 8) { setError(t('login.passwordMinLength')); setIsLoading(false); return }
-        await register(username, email, password, inviteToken || undefined)
+        await register(username, password, inviteToken || undefined)
       } else {
-        const result = await login(email, password)
+        const result = await login(identifier, password)
         if ('mfa_required' in result && result.mfa_required && 'mfa_token' in result) {
           setMfaToken(result.mfa_token)
           setMfaStep(true)
@@ -734,19 +734,21 @@ export default function LoginPage(): React.ReactElement {
                 </div>
               )}
 
-              {/* Email */}
-              {!(mode === 'login' && mfaStep) && !passwordChangeStep && (
+              {/* Username / email (login only) */}
+              {mode === 'login' && !mfaStep && !passwordChangeStep && (
               <div>
-                <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: '#374151', marginBottom: 6 }}>{t('common.email')}</label>
+                <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: '#374151', marginBottom: 6 }}>{t('login.username')}</label>
                 <div style={{ position: 'relative' }}>
-                  <Mail size={15} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', pointerEvents: 'none' }} />
+                  <User size={15} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', pointerEvents: 'none' }} />
                   <input
-                    type="email" value={email} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)} required
-                    placeholder={t('login.emailPlaceholder')} style={inputBase}
+                    type="text" value={identifier} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setIdentifier(e.target.value)} required
+                    placeholder="username"
+                    style={inputBase}
                     onFocus={(e: React.FocusEvent<HTMLInputElement>) => e.target.style.borderColor = '#111827'}
                     onBlur={(e: React.FocusEvent<HTMLInputElement>) => e.target.style.borderColor = '#e5e7eb'}
                   />
                 </div>
+                <p style={{ fontSize: 12, color: '#9ca3af', marginTop: 8 }}>You can also sign in with your email.</p>
               </div>
               )}
 
