@@ -38,8 +38,10 @@ interface AuthState {
   placesDetailsEnabled: boolean
 
   login: (identifier: string, password: string) => Promise<LoginResult>
+  adminLogin: (identifier: string, password: string) => Promise<LoginResult>
+  friendLogin: (username: string) => Promise<AuthResponse>
   completeMfaLogin: (mfaToken: string, code: string) => Promise<AuthResponse>
-  register: (username: string, password: string, invite_token?: string) => Promise<AuthResponse>
+  register: (username: string, password?: string, invite_token?: string) => Promise<AuthResponse>
   logout: () => void
   /** Pass `{ silent: true }` to refresh the user without toggling global isLoading (avoids unmounting protected routes). */
   loadUser: (opts?: { silent?: boolean }) => Promise<void>
@@ -112,6 +114,56 @@ export const useAuthStore = create<AuthState>()(
     }
   },
 
+  adminLogin: async (identifier: string, password: string) => {
+    authSequence++
+    set({ isLoading: true, error: null })
+    try {
+      const data = await authApi.adminLogin({ identifier, password }) as AuthResponse & { mfa_required?: boolean; mfa_token?: string }
+      if (data.mfa_required && data.mfa_token) {
+        set({ isLoading: false, error: null })
+        return { mfa_required: true as const, mfa_token: data.mfa_token }
+      }
+      set({
+        user: data.user,
+        isAuthenticated: true,
+        isLoading: false,
+        error: null,
+      })
+      connect()
+      tripSyncManager.syncAll().catch(console.error)
+      if (!data.user?.must_change_password) {
+        useSystemNoticeStore.getState().fetch()
+      }
+      return data as AuthResponse
+    } catch (err: unknown) {
+      const error = getApiErrorMessage(err, 'Login failed')
+      set({ isLoading: false, error })
+      throw new Error(error)
+    }
+  },
+
+  friendLogin: async (username: string) => {
+    authSequence++
+    set({ isLoading: true, error: null })
+    try {
+      const data = await authApi.friendLogin({ username }) as AuthResponse
+      set({
+        user: data.user,
+        isAuthenticated: true,
+        isLoading: false,
+        error: null,
+      })
+      connect()
+      tripSyncManager.syncAll().catch(console.error)
+      useSystemNoticeStore.getState().fetch()
+      return data
+    } catch (err: unknown) {
+      const error = getApiErrorMessage(err, 'Login failed')
+      set({ isLoading: false, error })
+      throw new Error(error)
+    }
+  },
+
   completeMfaLogin: async (mfaToken: string, code: string) => {
     authSequence++
     set({ isLoading: true, error: null })
@@ -136,11 +188,11 @@ export const useAuthStore = create<AuthState>()(
     }
   },
 
-  register: async (username: string, password: string, invite_token?: string) => {
+  register: async (username: string, password?: string, invite_token?: string) => {
     authSequence++
     set({ isLoading: true, error: null })
     try {
-      const data = await authApi.register({ username, password, invite_token })
+      const data = await authApi.register({ username, ...(password ? { password } : {}), invite_token })
       set({
         user: data.user,
         isAuthenticated: true,

@@ -63,7 +63,7 @@ apiClient.interceptors.request.use(
 )
 
 export function isAuthPublicPath(pathname: string): boolean {
-  const publicPaths = ['/login', '/register', '/forgot-password', '/reset-password']
+  const publicPaths = ['/login', '/friend/login', '/admin/login', '/register', '/forgot-password', '/reset-password']
   const publicPrefixes = ['/shared/', '/public/']
   return publicPaths.includes(pathname) || publicPrefixes.some((p) => pathname.startsWith(p))
 }
@@ -101,9 +101,11 @@ apiClient.interceptors.response.use(
 )
 
 export const authApi = {
-  register: (data: { username: string; password: string; email?: string; invite_token?: string }) => apiClient.post('/auth/register', data).then(r => r.data),
+  register: (data: { username: string; password?: string; email?: string; invite_token?: string }) => apiClient.post('/auth/register', data).then(r => r.data),
   validateInvite: (token: string) => apiClient.get(`/auth/invite/${token}`).then(r => r.data),
   login: (data: { identifier?: string; email?: string; password: string }) => apiClient.post('/auth/login', data).then(r => r.data),
+  adminLogin: (data: { identifier?: string; email?: string; password: string }) => apiClient.post('/auth/admin/login', data).then(r => r.data),
+  friendLogin: (data: { username?: string; identifier?: string }) => apiClient.post('/auth/friend/login', data).then(r => r.data),
   verifyMfaLogin: (data: { mfa_token: string; code: string }) => apiClient.post('/auth/mfa/verify-login', data).then(r => r.data),
   mfaSetup: () => apiClient.post('/auth/mfa/setup', {}).then(r => r.data),
   mfaEnable: (data: { code: string }) => apiClient.post('/auth/mfa/enable', data).then(r => r.data as { success: boolean; mfa_enabled: boolean; backup_codes?: string[] }),

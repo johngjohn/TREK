@@ -114,6 +114,40 @@ describe('Login', () => {
     expect(res.body.user.username).toBe('loginbyname');
   });
 
+  it('AUTH-042 — admin login route accepts admin credentials', async () => {
+    const { user: admin, password } = createAdmin(testDb, { username: 'chiefadmin' });
+    const res = await request(app).post('/api/auth/admin/login').send({ identifier: admin.username, password });
+    expect(res.status).toBe(200);
+    expect(res.body.user).toBeDefined();
+    expect(res.body.user.role).toBe('admin');
+  });
+
+  it('AUTH-043 — admin login route rejects non-admin account', async () => {
+    const { user, password } = createUser(testDb, { username: 'frienduser' });
+    const res = await request(app).post('/api/auth/admin/login').send({ identifier: user.username, password });
+    expect(res.status).toBe(401);
+    expect(res.body.error).toContain('Invalid email or password');
+  });
+
+  it('AUTH-044 — friend login route accepts invite-style account with username only', async () => {
+    const { user } = createUser(testDb, {
+      username: 'invitedfriend',
+      email: 'i.invitedfriend.abc123def456@placeholder.trek.invalid',
+    });
+    const res = await request(app).post('/api/auth/friend/login').send({ username: user.username });
+    expect(res.status).toBe(200);
+    expect(res.body.user).toBeDefined();
+    expect(res.body.user.username).toBe('invitedfriend');
+    expect(res.body.user.role).toBe('user');
+  });
+
+  it('AUTH-045 — friend login route rejects admin account', async () => {
+    const { user: admin } = createAdmin(testDb, { username: 'adminnogo' });
+    const res = await request(app).post('/api/auth/friend/login').send({ username: admin.username });
+    expect(res.status).toBe(401);
+    expect(res.body.error).toContain('Invalid username');
+  });
+
   it('AUTH-013 — POST /api/auth/logout clears session cookie', async () => {
     const res = await request(app).post('/api/auth/logout');
     expect(res.status).toBe(200);
@@ -208,6 +242,31 @@ describe('Registration', () => {
 
     const created = testDb.prepare('SELECT email FROM users WHERE username = ?').get('invited') as { email: string } | undefined;
     expect(created?.email).toMatch(/@placeholder\.trek\.invalid$/i);
+  });
+
+  it('AUTH-046 — invite registration supports username-only passwordless friend onboarding', async () => {
+    const { user: admin } = createAdmin(testDb);
+    const invite = createInviteToken(testDb, { max_uses: 1, created_by: admin.id });
+
+    const res = await request(app).post('/api/auth/register').send({
+      username: 'friendnopass',
+      invite_token: invite.token,
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.user.role).toBe('user');
+
+    const created = testDb.prepare('SELECT email, password_hash FROM users WHERE username = ?').get('friendnopass') as { email: string; password_hash: string } | undefined;
+    expect(created?.email).toMatch(/@placeholder\.trek\.invalid$/i);
+    expect(created?.password_hash).toBeTruthy();
+  });
+
+  it('AUTH-047 — bootstrap admin registration still requires password', async () => {
+    const res = await request(app).post('/api/auth/register').send({
+      username: 'firstadmin',
+      email: 'admin@example.com',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('password');
   });
 
   it('AUTH-011 — GET /api/auth/invite/:token with expired token returns 410', async () => {
