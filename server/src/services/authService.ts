@@ -28,6 +28,7 @@ authenticator.options = { window: 1 };
 const MFA_SETUP_TTL_MS = 15 * 60 * 1000;
 const mfaSetupPending = new Map<number, { secret: string; exp: number }>();
 const MFA_BACKUP_CODE_COUNT = 10;
+const PLACEHOLDER_EMAIL_DOMAIN = 'placeholder.trek.invalid';
 
 const ADMIN_SETTINGS_KEYS = [
   'allow_registration', 'allowed_file_types', 'require_mfa',
@@ -336,13 +337,48 @@ export function validateInviteToken(token: string): { error?: string; status?: n
   return { valid: true, max_uses: invite.max_uses, used_count: invite.used_count, expires_at: invite.expires_at };
 }
 
+export function isPlaceholderEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  return String(email).toLowerCase().endsWith(`@${PLACEHOLDER_EMAIL_DOMAIN}`);
+}
+
+/**
+ * Generate a collision-safe internal email for invite-only accounts that do
+ * not provide a real mailbox. Format:
+ *
+ *   i.<safe-username>.<random-hex>@placeholder.trek.invalid
+ *
+ * Notes:
+ * - Domain uses `.invalid` (RFC 2606) so it can never resolve publicly.
+ * - We still guarantee uniqueness against the users.email UNIQUE index.
+ */
+function generatePlaceholderEmail(username: string): string {
+  const safeUsername = String(username || 'user')
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '')
+    .slice(0, 32) || 'user';
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const suffix = randomBytes(8).toString('hex');
+    const candidate = `i.${safeUsername}.${suffix}@${PLACEHOLDER_EMAIL_DOMAIN}`;
+    const exists = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(candidate);
+    if (!exists) return candidate;
+  }
+
+  // Extremely unlikely fallback if random collisions happen repeatedly.
+  return `i.${safeUsername}.${Date.now()}.${randomBytes(4).toString('hex')}@${PLACEHOLDER_EMAIL_DOMAIN}`;
+}
+
 export function registerUser(body: {
   username?: string;
   email?: string;
   password?: string;
   invite_token?: string;
 }): { error?: string; status?: number; token?: string; user?: Record<string, unknown>; auditUserId?: number; auditDetails?: Record<string, unknown> } {
-  const { username, email, password, invite_token } = body;
+  const username = String(body.username || '').trim();
+  const email = String(body.email || '').trim().toLowerCase();
+  const password = body.password;
+  const invite_token = body.invite_token;
 
   const userCount = (db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number }).count;
 
@@ -359,35 +395,46 @@ export function registerUser(body: {
     if (!toggles.password_registration) {
       return { error: 'Password registration is disabled. Contact your administrator.', status: 403 };
     }
+    return { error: 'A valid invite link is required for registration.', status: 403 };
   }
 
-  if (!username || !email || !password) {
-    return { error: 'Username, email and password are required', status: 400 };
+  if (!username || !password) {
+    return { error: 'Username and password are required', status: 400 };
   }
 
   const pwCheck = validatePassword(password);
   if (!pwCheck.ok) return { error: pwCheck.reason, status: 400 };
 
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) {
-    return { error: 'Invalid email format', status: 400 };
+  const isBootstrap = userCount === 0;
+  let emailToStore = email;
+  if (emailToStore) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(emailToStore)) {
+      return { error: 'Invalid email format', status: 400 };
+    }
+  } else if (!isBootstrap) {
+    // Invite-only users can omit real email; we store a unique internal
+    // placeholder to satisfy the NOT NULL + UNIQUE email schema constraints.
+    emailToStore = generatePlaceholderEmail(username);
+  } else {
+    return { error: 'Email is required for initial administrator setup', status: 400 };
   }
 
-  const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)').get(email, username);
+  const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)').get(emailToStore, username);
   if (existingUser) {
     return { error: 'Registration failed. Please try different credentials.', status: 409 };
   }
 
   const password_hash = bcrypt.hashSync(password, 12);
-  const isFirstUser = userCount === 0;
+  const isFirstUser = isBootstrap;
   const role = isFirstUser ? 'admin' : 'user';
 
   try {
     const result = db.prepare(
       'INSERT INTO users (username, email, password_hash, role, first_seen_version, login_count) VALUES (?, ?, ?, ?, ?, 0)'
-    ).run(username, email, password_hash, role, process.env.APP_VERSION || '0.0.0');
+    ).run(username, emailToStore, password_hash, role, process.env.APP_VERSION || '0.0.0');
 
-    const user = { id: result.lastInsertRowid, username, email, role, avatar: null, mfa_enabled: false };
+    const user = { id: result.lastInsertRowid, username, email: emailToStore, role, avatar: null, mfa_enabled: false };
     const token = generateToken(user);
 
     if (validInvite) {
@@ -403,7 +450,7 @@ export function registerUser(body: {
       token,
       user: { ...user, avatar_url: null },
       auditUserId: Number(result.lastInsertRowid),
-      auditDetails: { username, email, role },
+      auditDetails: { username, email: emailToStore, role, placeholder_email: isPlaceholderEmail(emailToStore) },
     };
   } catch {
     return { error: 'Error creating user', status: 500 };
@@ -411,6 +458,7 @@ export function registerUser(body: {
 }
 
 export function loginUser(body: {
+  identifier?: string;
   email?: string;
   password?: string;
 }): {
@@ -428,16 +476,17 @@ export function loginUser(body: {
     return { error: 'Password authentication is disabled. Please sign in with SSO.', status: 403 };
   }
 
-  const { email, password } = body;
-  if (!email || !password) {
-    return { error: 'Email and password are required', status: 400 };
+  const identifier = String(body.identifier || body.email || '').trim();
+  const password = body.password;
+  if (!identifier || !password) {
+    return { error: 'Username/email and password are required', status: 400 };
   }
 
-  const user = db.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)').get(email) as User | undefined;
+  const user = db.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)').get(identifier, identifier) as User | undefined;
   if (!user) {
     return {
       error: 'Invalid email or password', status: 401,
-      auditUserId: null, auditAction: 'user.login_failed', auditDetails: { email, reason: 'unknown_email' },
+      auditUserId: null, auditAction: 'user.login_failed', auditDetails: { identifier, reason: 'unknown_identifier' },
     };
   }
 
@@ -445,7 +494,7 @@ export function loginUser(body: {
   if (!validPassword) {
     return {
       error: 'Invalid email or password', status: 401,
-      auditUserId: Number(user.id), auditAction: 'user.login_failed', auditDetails: { email, reason: 'wrong_password' },
+      auditUserId: Number(user.id), auditAction: 'user.login_failed', auditDetails: { identifier, reason: 'wrong_password' },
     };
   }
 
@@ -467,7 +516,7 @@ export function loginUser(body: {
     user: { ...userSafe, avatar_url: avatarUrl(user) },
     auditUserId: Number(user.id),
     auditAction: 'user.login',
-    auditDetails: { email },
+    auditDetails: { identifier },
   };
 }
 
@@ -1065,7 +1114,7 @@ export interface PasswordResetRequestOutcome {
   tokenForDelivery: string | null;   // raw token — send via email or log, never return to client
   userId: number | null;
   userEmail: string | null;
-  reason: 'issued' | 'no_user' | 'oidc_only' | 'throttled_per_email' | 'password_login_disabled';
+  reason: 'issued' | 'no_user' | 'oidc_only' | 'no_recovery_email' | 'throttled_per_email' | 'password_login_disabled';
 }
 
 // Per-email throttle (defence-in-depth on top of the per-IP limiter).
@@ -1109,12 +1158,15 @@ export function requestPasswordReset(rawEmail: string, createdIp: string | null)
     return { tokenForDelivery: null, userId: null, userEmail: null, reason: 'no_user' };
   }
 
-  const user = db.prepare('SELECT id, email, password_hash, oidc_sub FROM users WHERE email = ?').get(email) as
+  const user = db.prepare('SELECT id, email, password_hash, oidc_sub FROM users WHERE LOWER(email) = LOWER(?)').get(email) as
     | { id: number; email: string; password_hash: string | null; oidc_sub: string | null }
     | undefined;
 
   if (!user) {
     return { tokenForDelivery: null, userId: null, userEmail: null, reason: 'no_user' };
+  }
+  if (isPlaceholderEmail(user.email)) {
+    return { tokenForDelivery: null, userId: user.id, userEmail: user.email, reason: 'no_recovery_email' };
   }
   // OIDC-only account (no local password) — we can't reset what isn't there.
   // The client still gets the generic "if that email exists…" response.

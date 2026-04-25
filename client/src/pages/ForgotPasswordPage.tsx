@@ -101,8 +101,11 @@ const ForgotPasswordPage: React.FC = () => {
             <h1 style={{ fontSize: 22, fontWeight: 700, color: '#111827', margin: '0 0 8px 0' }}>
               {t('login.forgotPasswordTitle')}
             </h1>
-            <p style={{ fontSize: 13.5, color: '#6b7280', lineHeight: 1.55, margin: '0 0 16px 0' }}>
+            <p style={{ fontSize: 13.5, color: '#6b7280', lineHeight: 1.55, margin: '0 0 8px 0' }}>
               {t('login.forgotPasswordBody')}
+            </p>
+            <p style={{ fontSize: 12.5, color: '#6b7280', lineHeight: 1.5, margin: '0 0 16px 0' }}>
+              Password recovery is only available for accounts with a real email address.
             </p>
             {smtpConfigured === false && (
               <div style={{
