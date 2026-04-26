@@ -59,7 +59,8 @@ function ProtectedRoute({ children, adminRequired = false, addonId }: ProtectedR
 
   if (!isAuthenticated) {
     const redirectParam = encodeURIComponent(location.pathname + location.search)
-    return <Navigate to={`/login?redirect=${redirectParam}`} replace />
+    const loginPath = adminRequired ? '/admin/login' : '/friend/login'
+    return <Navigate to={`${loginPath}?redirect=${redirectParam}`} replace />
   }
 
   if (
@@ -98,7 +99,7 @@ function RootRedirect() {
     )
   }
 
-  return <Navigate to={isAuthenticated ? '/dashboard' : '/login'} replace />
+  return <Navigate to={isAuthenticated ? '/dashboard' : '/friend/login'} replace />
 }
 
 export default function App() {
@@ -107,7 +108,7 @@ export default function App() {
   const { loadAddons } = useAddonStore()
 
   useEffect(() => {
-    if (!location.pathname.startsWith('/shared/') && !location.pathname.startsWith('/public/') && !location.pathname.startsWith('/login')) {
+    if (!location.pathname.startsWith('/shared/') && !location.pathname.startsWith('/public/') && !location.pathname.startsWith('/login') && !location.pathname.startsWith('/friend/login') && !location.pathname.startsWith('/admin/login')) {
       // If the persist snapshot already has an authenticated user, validate
       // silently so the PWA shell renders immediately without a spinner.
       const alreadyAuthenticated = useAuthStore.getState().isAuthenticated
@@ -200,6 +201,8 @@ export default function App() {
   }, [settings.dark_mode, isSharedPage])
 
   const isAuthPage = location.pathname.startsWith('/login')
+    || location.pathname.startsWith('/friend/login')
+    || location.pathname.startsWith('/admin/login')
     || location.pathname.startsWith('/register')
     || location.pathname.startsWith('/forgot-password')
     || location.pathname.startsWith('/reset-password')
@@ -211,7 +214,9 @@ export default function App() {
       <OfflineBanner />
       <Routes>
         <Route path="/" element={<RootRedirect />} />
-        <Route path="/login" element={<LoginPage />} />
+        <Route path="/login" element={<Navigate to="/friend/login" replace />} />
+        <Route path="/friend/login" element={<LoginPage />} />
+        <Route path="/admin/login" element={<LoginPage />} />
         <Route path="/shared/:token" element={<SharedTripPage />} />
         <Route path="/public/journey/:token" element={<JourneyPublicPage />} />
         <Route path="/register" element={<LoginPage />} />

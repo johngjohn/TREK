@@ -148,15 +148,35 @@ router.post('/register', authLimiter, (req: Request, res: Response) => {
   res.status(201).json({ token: result.token, user: result.user });
 });
 
-router.post('/login', authLimiter, (req: Request, res: Response) => {
-  const result = loginUser(req.body);
+const handleLoginResult = (req: Request, res: Response, result: ReturnType<typeof loginUser>): void => {
   if (result.auditAction) {
     writeAudit({ userId: result.auditUserId ?? null, action: result.auditAction, ip: getClientIp(req), details: result.auditDetails });
   }
-  if (result.error) return res.status(result.status!).json({ error: result.error });
-  if (result.mfa_required) return res.json({ mfa_required: true, mfa_token: result.mfa_token });
+  if (result.error) {
+    res.status(result.status!).json({ error: result.error });
+    return;
+  }
+  if (result.mfa_required) {
+    res.json({ mfa_required: true, mfa_token: result.mfa_token });
+    return;
+  }
   setAuthCookie(res, result.token!, req);
   res.json({ token: result.token, user: result.user });
+};
+
+router.post('/login', authLimiter, (req: Request, res: Response) => {
+  const result = loginUser(req.body);
+  handleLoginResult(req, res, result);
+});
+
+router.post('/admin/login', authLimiter, (req: Request, res: Response) => {
+  const result = loginUser(req.body, { mode: 'admin' });
+  handleLoginResult(req, res, result);
+});
+
+router.post('/friend/login', authLimiter, (req: Request, res: Response) => {
+  const result = loginUser(req.body, { mode: 'friend' });
+  handleLoginResult(req, res, result);
 });
 
 // ---------------------------------------------------------------------------

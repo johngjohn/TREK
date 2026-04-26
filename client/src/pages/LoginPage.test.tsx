@@ -590,4 +590,59 @@ describe('LoginPage', () => {
       });
     });
   });
+
+  describe('FE-PAGE-LOGIN-022: /admin/login uses dedicated admin endpoint', () => {
+    it('submits credentials to /api/auth/admin/login', async () => {
+      let called = false;
+      server.use(
+        http.post('/api/auth/admin/login', () => {
+          called = true;
+          return HttpResponse.json({ user: { id: 2, username: 'admin', email: 'admin@example.com', role: 'admin' } });
+        }),
+      );
+
+      const user = userEvent.setup();
+      render(<LoginPage />, { initialEntries: ['/admin/login'] });
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
+      });
+
+      await user.type(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER), 'admin');
+      await user.type(screen.getByPlaceholderText(PASSWORD_PLACEHOLDER), 'password123');
+      await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+      await waitFor(() => {
+        expect(called).toBe(true);
+      });
+    });
+  });
+
+  describe('FE-PAGE-LOGIN-023: /friend/login is username-only and passwordless', () => {
+    it('hides password input and submits username to /api/auth/friend/login', async () => {
+      let called = false;
+      server.use(
+        http.post('/api/auth/friend/login', () => {
+          called = true;
+          return HttpResponse.json({ user: { id: 3, username: 'frienduser', email: 'i.friend.123@placeholder.trek.invalid', role: 'user' } });
+        }),
+      );
+
+      const user = userEvent.setup();
+      render(<LoginPage />, { initialEntries: ['/friend/login'] });
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER)).toBeInTheDocument();
+      });
+
+      expect(screen.queryByPlaceholderText(PASSWORD_PLACEHOLDER)).toBeNull();
+
+      await user.type(screen.getByPlaceholderText(IDENTIFIER_PLACEHOLDER), 'frienduser');
+      await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+      await waitFor(() => {
+        expect(called).toBe(true);
+      });
+    });
+  });
 });

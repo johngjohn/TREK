@@ -398,14 +398,22 @@ export function registerUser(body: {
     return { error: 'A valid invite link is required for registration.', status: 403 };
   }
 
-  if (!username || !password) {
+  const isBootstrap = userCount === 0;
+
+  if (!username) {
+    return { error: 'Username is required', status: 400 };
+  }
+
+  const requiresPassword = isBootstrap || !validInvite;
+  if (requiresPassword && !password) {
     return { error: 'Username and password are required', status: 400 };
   }
 
-  const pwCheck = validatePassword(password);
-  if (!pwCheck.ok) return { error: pwCheck.reason, status: 400 };
+  if (password) {
+    const pwCheck = validatePassword(password);
+    if (!pwCheck.ok) return { error: pwCheck.reason, status: 400 };
+  }
 
-  const isBootstrap = userCount === 0;
   let emailToStore = email;
   if (emailToStore) {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -425,7 +433,8 @@ export function registerUser(body: {
     return { error: 'Registration failed. Please try different credentials.', status: 409 };
   }
 
-  const password_hash = bcrypt.hashSync(password, 12);
+  const chosenPassword = password || `${randomBytes(16).toString('hex')}Aa1!`;
+  const password_hash = bcrypt.hashSync(chosenPassword, 12);
   const isFirstUser = isBootstrap;
   const role = isFirstUser ? 'admin' : 'user';
 
@@ -457,11 +466,15 @@ export function registerUser(body: {
   }
 }
 
-export function loginUser(body: {
-  identifier?: string;
-  email?: string;
-  password?: string;
-}): {
+export function loginUser(
+  body: {
+    identifier?: string;
+    email?: string;
+    username?: string;
+    password?: string;
+  },
+  opts: { mode?: 'default' | 'admin' | 'friend' } = {}
+): {
   error?: string;
   status?: number;
   token?: string;
@@ -472,6 +485,46 @@ export function loginUser(body: {
   auditAction?: string;
   auditDetails?: Record<string, unknown>;
 } {
+  const mode = opts.mode ?? 'default';
+
+  if (mode === 'friend') {
+    const username = String(body.username || body.identifier || '').trim();
+    if (!username) {
+      return { error: 'Username is required', status: 400 };
+    }
+
+    const user = db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)').get(username) as User | undefined;
+    if (!user || user.role === 'admin') {
+      return {
+        error: 'Invalid username', status: 401,
+        auditUserId: user ? Number(user.id) : null,
+        auditAction: 'user.login_failed',
+        auditDetails: { identifier: username, reason: 'friend_username_invalid' },
+      };
+    }
+
+    if (!isPlaceholderEmail(user.email)) {
+      return {
+        error: 'Friend passwordless login is only available for invited accounts',
+        status: 403,
+        auditUserId: Number(user.id),
+        auditAction: 'user.login_failed',
+        auditDetails: { identifier: username, reason: 'friend_not_invited' },
+      };
+    }
+
+    db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP, login_count = login_count + 1 WHERE id = ?').run(user.id);
+    const token = generateToken(user);
+    const userSafe = stripUserForClient(user) as Record<string, unknown>;
+    return {
+      token,
+      user: { ...userSafe, avatar_url: avatarUrl(user) },
+      auditUserId: Number(user.id),
+      auditAction: 'user.login',
+      auditDetails: { identifier: username, mode: 'friend_passwordless' },
+    };
+  }
+
   if (isOidcOnlyMode()) {
     return { error: 'Password authentication is disabled. Please sign in with SSO.', status: 403 };
   }
@@ -487,6 +540,15 @@ export function loginUser(body: {
     return {
       error: 'Invalid email or password', status: 401,
       auditUserId: null, auditAction: 'user.login_failed', auditDetails: { identifier, reason: 'unknown_identifier' },
+    };
+  }
+
+  if (mode === 'admin' && user.role !== 'admin') {
+    return {
+      error: 'Invalid email or password', status: 401,
+      auditUserId: Number(user.id),
+      auditAction: 'user.login_failed',
+      auditDetails: { identifier, reason: 'admin_required' },
     };
   }
 
@@ -516,7 +578,7 @@ export function loginUser(body: {
     user: { ...userSafe, avatar_url: avatarUrl(user) },
     auditUserId: Number(user.id),
     auditAction: 'user.login',
-    auditDetails: { identifier },
+    auditDetails: { identifier, mode: mode === 'admin' ? 'admin' : 'default' },
   };
 }
 

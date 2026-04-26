@@ -39,11 +39,13 @@ export default function LoginPage(): React.ReactElement {
 
   const [langDropdownOpen, setLangDropdownOpen] = useState<boolean>(false)
 
-  const { login, register, demoLogin, completeMfaLogin, loadUser } = useAuthStore()
+  const { login, adminLogin, friendLogin, register, demoLogin, completeMfaLogin, loadUser } = useAuthStore()
   const { setLanguageLocal, setLanguageTransient } = useSettingsStore()
   const navigate = useNavigate()
   const location = useLocation()
   const noRedirect = !!(location.state as { noRedirect?: boolean } | null)?.noRedirect
+  const isAdminRoute = location.pathname.startsWith('/admin/login')
+  const isFriendRoute = location.pathname.startsWith('/friend/login')
 
   const redirectTarget = useMemo(() => {
     const params = new URLSearchParams(window.location.search)
@@ -64,7 +66,7 @@ export default function LoginPage(): React.ReactElement {
 
     if (invite) {
       setInviteToken(invite)
-      setMode('register')
+      if (!isAdminRoute) setMode('register')
       authApi.validateInvite(invite).then(() => {
         setInviteValid(true)
       }).catch(() => {
@@ -111,13 +113,17 @@ export default function LoginPage(): React.ReactElement {
     authApi.getAppConfig?.().catch(() => null).then((config: AppConfig | null) => {
       if (config) {
         setAppConfig(config)
-        if (!config.has_users) setMode('register')
-        if (!config.password_login && config.oidc_login && config.oidc_configured && config.has_users && !invite && !noRedirect) {
+        if (!config.has_users) {
+          setMode('register')
+        } else if (isAdminRoute || isFriendRoute) {
+          setMode('login')
+        }
+        if (!config.password_login && config.oidc_login && config.oidc_configured && config.has_users && !invite && !noRedirect && !isFriendRoute) {
           window.location.href = '/api/auth/oidc/login'
         }
       }
     })
-  }, [navigate, t, noRedirect])
+  }, [navigate, t, noRedirect, isAdminRoute, isFriendRoute])
 
   // Language detection chain (runs once on mount, only if user has no saved preference):
   // 1. localStorage → already in store initial state, skip
@@ -202,18 +208,23 @@ export default function LoginPage(): React.ReactElement {
       }
       if (mode === 'register') {
         if (!username.trim()) { setError(t('login.usernameRequired')); setIsLoading(false); return }
-        if (password.length < 8) { setError(t('login.passwordMinLength')); setIsLoading(false); return }
-        await register(username, password, inviteToken || undefined)
+        const friendInviteRegistration = isFriendRoute && !!inviteToken && !!appConfig?.has_users
+        if (!friendInviteRegistration && password.length < 8) { setError(t('login.passwordMinLength')); setIsLoading(false); return }
+        await register(username, friendInviteRegistration ? undefined : password, inviteToken || undefined)
       } else {
-        const result = await login(identifier, password)
-        if ('mfa_required' in result && result.mfa_required && 'mfa_token' in result) {
+        const result = isFriendRoute
+          ? await friendLogin(identifier)
+          : isAdminRoute
+            ? await adminLogin(identifier, password)
+            : await login(identifier, password)
+        if (!isFriendRoute && 'mfa_required' in result && result.mfa_required && 'mfa_token' in result) {
           setMfaToken(result.mfa_token)
           setMfaStep(true)
           setMfaCode('')
           setIsLoading(false)
           return
         }
-        if ('user' in result && result.user?.must_change_password) {
+        if (!isFriendRoute && 'user' in result && result.user?.must_change_password) {
           setSavedLoginPassword(password)
           setPasswordChangeStep(true)
           setIsLoading(false)
@@ -228,7 +239,8 @@ export default function LoginPage(): React.ReactElement {
     }
   }
 
-  const showRegisterOption = (appConfig?.password_registration || !appConfig?.has_users || inviteValid) && (appConfig?.setup_complete !== false || !appConfig?.has_users)
+  const showRegisterOption = !isAdminRoute && (appConfig?.password_registration || !appConfig?.has_users || inviteValid) && (appConfig?.setup_complete !== false || !appConfig?.has_users)
+  const hidePasswordInput = isFriendRoute && !passwordChangeStep && !(mode === 'login' && mfaStep) && (mode === 'login' || (mode === 'register' && !!inviteToken && !!appConfig?.has_users))
 
   // In OIDC-only mode, show a minimal page that redirects directly to the IdP
   const oidcOnly = !appConfig?.password_login && appConfig?.oidc_login && appConfig?.oidc_configured
@@ -748,12 +760,12 @@ export default function LoginPage(): React.ReactElement {
                     onBlur={(e: React.FocusEvent<HTMLInputElement>) => e.target.style.borderColor = '#e5e7eb'}
                   />
                 </div>
-                <p style={{ fontSize: 12, color: '#9ca3af', marginTop: 8 }}>You can also sign in with your email.</p>
+                {!isFriendRoute && <p style={{ fontSize: 12, color: '#9ca3af', marginTop: 8 }}>You can also sign in with your email.</p>}
               </div>
               )}
 
               {/* Password */}
-              {!(mode === 'login' && mfaStep) && !passwordChangeStep && (
+              {!(mode === 'login' && mfaStep) && !passwordChangeStep && !hidePasswordInput && (
               <div>
                 <label style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: '#374151', marginBottom: 6 }}>{t('common.password')}</label>
                 <div style={{ position: 'relative' }}>
@@ -783,7 +795,7 @@ export default function LoginPage(): React.ReactElement {
                     }} />
                   </button>
                 </div>
-                {mode === 'login' && (
+                {mode === 'login' && !isFriendRoute && (
                   <div style={{ textAlign: 'right', marginTop: 6 }}>
                     <button type="button" onClick={() => navigate('/forgot-password')} style={{
                       background: 'none', border: 'none', cursor: 'pointer', padding: 0,
